@@ -1,3 +1,8 @@
 node_modules/
 .DS_Store
 *.log
+
+# Original-Bilder nicht ins Repo, nur die zugeschnittenen Karten in public/img/cards/
+public/img/*.jpeg
+public/img/*.jpg
+public/img/*.png

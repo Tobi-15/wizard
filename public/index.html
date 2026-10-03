@@ -3,19 +3,44 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0f2a22">
+  <meta name="theme-color" content="#0c1f19">
   <title>Wizard</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700;6..12,800&display=swap">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Symbole für Kartenfarben, Zauberer, Narr und Bedienelemente -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-red" viewBox="0 0 24 24"><path fill="currentColor" d="M12.2 1.8c.9 3.4 4.9 5.9 4.9 11a5.1 5.1 0 0 1-10.2 0c0-2.6 1.2-4.2 2.4-5.5.3 1.7 1.2 2.7 2.3 3.1-.6-2.9-.4-5.6.6-8.6z"/></symbol>
+      <symbol id="i-yellow" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.6" fill="currentColor"/><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M12 2.2v2.6M12 19.2v2.6M2.2 12h2.6M19.2 12h2.6M5.1 5.1l1.8 1.8M17.1 17.1l1.8 1.8M5.1 18.9l1.8-1.8M17.1 6.9l1.8-1.8"/></symbol>
+      <symbol id="i-green" viewBox="0 0 24 24"><path fill="currentColor" d="M20.5 3.2C10.6 3.4 4 8.6 4 15c0 2 .6 3.5 1.4 4.4.8-4 3.6-7.7 8.6-10-3.8 2.8-6 6.3-6.9 10.3 1.1.8 2.5 1.3 4.3 1.3 6.4 0 9.3-6.3 9.1-17.8z"/></symbol>
+      <symbol id="i-blue" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2.4c3.6 4.7 6.7 8.5 6.7 12.3a6.7 6.7 0 0 1-13.4 0c0-3.8 3.1-7.6 6.7-12.3z"/></symbol>
+      <symbol id="i-Z" viewBox="0 0 24 24"><path fill="currentColor" d="M12 1.8l3 6.3 6.8.8-5 4.8 1.3 6.8L12 17.3l-6.1 3.2 1.3-6.8-5-4.8 6.8-.8z"/></symbol>
+      <symbol id="i-N" viewBox="0 0 24 24"><path fill="currentColor" d="M4.6 15.2L3.2 6.6l5.3 3.9L12 3.6l3.5 6.9 5.3-3.9-1.4 8.6z"/><path fill="currentColor" d="M4 16.6h16l-.8 2.8H4.8z"/><circle cx="3.2" cy="5.4" r="1.7" fill="currentColor"/><circle cx="12" cy="2.4" r="1.7" fill="currentColor"/><circle cx="20.8" cy="5.4" r="1.7" fill="currentColor"/></symbol>
+      <symbol id="i-crown" viewBox="0 0 24 24"><path fill="currentColor" d="M3 8l4.5 3.5L12 5l4.5 6.5L21 8l-1.8 10H4.8z"/></symbol>
+      <symbol id="i-sound" viewBox="0 0 24 24"><path fill="currentColor" d="M4 9h4l5-4v14l-5-4H4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M16 9.2a4 4 0 0 1 0 5.6M18.6 6.6a7.6 7.6 0 0 1 0 10.8"/></symbol>
+      <symbol id="i-mute" viewBox="0 0 24 24"><path fill="currentColor" d="M4 9h4l5-4v14l-5-4H4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M16.5 9.5l5 5M21.5 9.5l-5 5"/></symbol>
+    </defs>
+  </svg>
+
   <div id="conn-banner" class="conn-banner" hidden>Verbindung unterbrochen – verbinde neu …</div>
 
   <!-- Start: Name + Raum erstellen/beitreten -->
   <main id="screen-start" class="screen center-screen" hidden>
     <div class="panel start-panel">
-      <h1 class="logo">Wizard</h1>
-      <p class="tagline">Das Stichspiel – online mit Freunden</p>
+      <div class="brand">
+        <div class="brand-cards" aria-hidden="true">
+          <span class="mini-card red"><svg><use href="#i-red"/></svg></span>
+          <span class="mini-card Z"><svg><use href="#i-Z"/></svg></span>
+          <span class="mini-card blue"><svg><use href="#i-blue"/></svg></span>
+        </div>
+        <h1 class="logo">Wizard</h1>
+        <p class="tagline">Das Stichspiel – online mit Freunden</p>
+      </div>
       <label class="field">
         <span>Dein Name</span>
         <input id="name-input" maxlength="20" autocomplete="nickname" placeholder="z. B. Tobi">
@@ -23,7 +48,7 @@
       <button id="btn-create" class="btn primary wide">Neuen Raum erstellen</button>
       <div class="divider"><span>oder</span></div>
       <div class="join-row">
-        <input id="code-input" maxlength="4" placeholder="CODE" autocapitalize="characters" spellcheck="false">
+        <input id="code-input" maxlength="4" placeholder="CODE" autocapitalize="characters" spellcheck="false" aria-label="Raumcode">
         <button id="btn-join" class="btn">Beitreten</button>
       </div>
       <details class="rules">
@@ -46,7 +71,7 @@
       <p class="eyebrow">Raum</p>
       <div class="room-code" id="lobby-code">····</div>
       <div class="invite">
-        <input id="invite-link" readonly>
+        <input id="invite-link" readonly aria-label="Einladungslink">
         <button id="btn-copy" class="btn">Link kopieren</button>
       </div>
       <h2>Spieler <span id="lobby-count" class="muted"></span></h2>
@@ -72,16 +97,16 @@
       </div>
       <div class="trump" id="g-trump"></div>
       <div class="topbar-right">
-        <button class="btn small" id="btn-last">Letzter Stich</button>
+        <button class="icon-btn" id="btn-sound" aria-label="Ton aus" title="Ton an/aus"><svg><use href="#i-sound"/></svg></button>
+        <button class="btn small" id="btn-last"><span class="long">Letzter Stich</span><span class="short">Stich</span></button>
         <button class="btn small" id="btn-scores">Punkte</button>
       </div>
     </header>
 
-    <section class="opponents" id="g-opponents"></section>
-
-    <section class="table">
+    <section class="table" id="g-table">
+      <div class="seats" id="g-seats"></div>
       <div class="trick" id="g-trick"></div>
-      <div class="status" id="g-status"></div>
+      <div class="status" id="g-status" aria-live="polite"></div>
     </section>
 
     <section class="actions" id="g-actions"></section>
@@ -106,9 +131,10 @@
       <h2>Letzter Stich</h2>
       <button class="btn small ghost" data-close>Schließen</button>
     </div>
-    <div class="trick" id="last-trick"></div>
+    <div class="last-trick" id="last-trick"></div>
   </dialog>
 
+  <canvas id="confetti" class="confetti" hidden></canvas>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="client.js" type="module"></script>

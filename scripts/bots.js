@@ -99,7 +99,7 @@ host.send({ type: 'start' });
 const timeout = setTimeout(() => {
   console.error('Timeout! Fehler:', bots.map((b) => b.errors), 'Letzter Zustand:', JSON.stringify(host.last?.game, null, 1).slice(0, 2000));
   process.exit(1);
-}, 30000);
+}, Number(process.env.TIMEOUT_MS) || 30000);
 const final = await done;
 checkRound(final);
 clearTimeout(timeout);
