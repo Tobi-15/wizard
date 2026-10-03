@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f2a22">
+  <title>Wizard</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="conn-banner" class="conn-banner" hidden>Verbindung unterbrochen – verbinde neu …</div>
+
+  <!-- Start: Name + Raum erstellen/beitreten -->
+  <main id="screen-start" class="screen center-screen" hidden>
+    <div class="panel start-panel">
+      <h1 class="logo">Wizard</h1>
+      <p class="tagline">Das Stichspiel – online mit Freunden</p>
+      <label class="field">
+        <span>Dein Name</span>
+        <input id="name-input" maxlength="20" autocomplete="nickname" placeholder="z. B. Tobi">
+      </label>
+      <button id="btn-create" class="btn primary wide">Neuen Raum erstellen</button>
+      <div class="divider"><span>oder</span></div>
+      <div class="join-row">
+        <input id="code-input" maxlength="4" placeholder="CODE" autocapitalize="characters" spellcheck="false">
+        <button id="btn-join" class="btn">Beitreten</button>
+      </div>
+      <details class="rules">
+        <summary>Regeln (mit Hausregel)</summary>
+        <ul>
+          <li>60 Karten: vier Farben 1–13, 4 Zauberer (Z), 4 Narren (N). In Runde <i>r</i> bekommt jeder <i>r</i> Karten.</li>
+          <li>Die aufgedeckte Karte bestimmt Trumpf. Zauberer: Der Geber wählt die Farbe. Narr oder letzte Runde: kein Trumpf.</li>
+          <li>Vor jeder Runde sagt jeder an, wie viele Stiche er macht.</li>
+          <li>Ausgespielte Farbe bedienen, <b>aber Trumpf darf immer gelegt werden</b> (Hausregel). Wird Trumpf ausgespielt, muss Trumpf bedient werden. Zauberer und Narren gehen immer.</li>
+          <li>Der erste Zauberer gewinnt den Stich, Narren verlieren immer.</li>
+          <li>Richtig angesagt: 20 + 10 pro Stich. Sonst −10 pro Stich Abweichung.</li>
+        </ul>
+      </details>
+    </div>
+  </main>
+
+  <!-- Lobby -->
+  <main id="screen-lobby" class="screen center-screen" hidden>
+    <div class="panel lobby-panel">
+      <p class="eyebrow">Raum</p>
+      <div class="room-code" id="lobby-code">····</div>
+      <div class="invite">
+        <input id="invite-link" readonly>
+        <button id="btn-copy" class="btn">Link kopieren</button>
+      </div>
+      <h2>Spieler <span id="lobby-count" class="muted"></span></h2>
+      <ul id="lobby-players" class="player-list"></ul>
+      <label class="toggle">
+        <input type="checkbox" id="opt-noEvenBids">
+        <span>Ansagen dürfen nicht aufgehen <small class="muted">(Summe ≠ Stichzahl)</small></span>
+      </label>
+      <p id="lobby-hint" class="muted small"></p>
+      <div class="row">
+        <button id="btn-leave" class="btn ghost">Verlassen</button>
+        <button id="btn-start" class="btn primary">Spiel starten</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Spiel -->
+  <main id="screen-game" class="screen game-screen" hidden>
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="pill" id="g-round"></span>
+        <span class="pill" id="g-bidsum"></span>
+      </div>
+      <div class="trump" id="g-trump"></div>
+      <div class="topbar-right">
+        <button class="btn small" id="btn-last">Letzter Stich</button>
+        <button class="btn small" id="btn-scores">Punkte</button>
+      </div>
+    </header>
+
+    <section class="opponents" id="g-opponents"></section>
+
+    <section class="table">
+      <div class="trick" id="g-trick"></div>
+      <div class="status" id="g-status"></div>
+    </section>
+
+    <section class="actions" id="g-actions"></section>
+
+    <section class="me">
+      <div class="me-info" id="g-me"></div>
+      <div class="hand" id="g-hand"></div>
+    </section>
+  </main>
+
+  <!-- Dialoge -->
+  <dialog id="dlg-scores" class="dialog">
+    <div class="dialog-head">
+      <h2>Punkteblock</h2>
+      <button class="btn small ghost" data-close>Schließen</button>
+    </div>
+    <div class="score-wrap" id="score-table"></div>
+  </dialog>
+
+  <dialog id="dlg-last" class="dialog">
+    <div class="dialog-head">
+      <h2>Letzter Stich</h2>
+      <button class="btn small ghost" data-close>Schließen</button>
+    </div>
+    <div class="trick" id="last-trick"></div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="client.js" type="module"></script>
+</body>
+</html>
