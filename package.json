@@ -7,11 +7,11 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test server/",
+    "test": "node --test server/*.test.js",
     "bots": "node scripts/bots.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   },
   "dependencies": {
     "ws": "^8.18.0"

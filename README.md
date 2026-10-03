@@ -62,5 +62,6 @@ node scripts/bots.js 6 --even  # … mit „Ansagen dürfen nicht aufgehen“
 |---|---|
 | `server/game.js` | Spielregeln als reine Logik (Bedienregel, Stichgewinner, Wertung, Phasen) |
 | `server/rooms.js` | Räume, Beitreten, Reconnect, Sicht pro Spieler (fremde Karten bleiben auf dem Server) |
-| `server/index.js` | HTTP für die statischen Dateien und WebSocket unter `/ws` |
+| `server/server.js` | HTTP für die statischen Dateien und WebSocket unter `/ws` |
+| `server/index.js` | Startpunkt für `npm start` |
 | `public/` | Oberfläche (Vanilla JS, kein Build-Schritt) |

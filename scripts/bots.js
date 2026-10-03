@@ -6,7 +6,7 @@
 import { WebSocket } from 'ws';
 import { randomBytes } from 'node:crypto';
 import assert from 'node:assert/strict';
-import { startServer } from '../server/index.js';
+import { startServer } from '../server/server.js';
 import { scoreFor } from '../server/game.js';
 
 const n = Number(process.argv[2]) || 4;
