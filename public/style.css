@@ -446,6 +446,11 @@ input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
 .toast.err { background: #8f1d21; }
 .confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 30; }
 
+/* Link zur 3D-Ansicht (nur für große Bildschirme gedacht) */
+a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+p.to-3d { text-align: center; margin: 1rem 0 0; }
+p.to-3d a { color: #3d2a86; font-weight: 700; }
+
 /* ---------- Handy ---------- */
 @media (max-width: 600px) {
   :root { --seat-w: 104px; --seat-h: 84px; }
@@ -472,6 +477,7 @@ input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
   .status { font-size: 0.85rem; bottom: 4%; }
   .room-code { font-size: 2.4rem; }
   .trump .card { --card-w: 30px; }
+  .to-3d { display: none !important; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
