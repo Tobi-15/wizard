@@ -2,6 +2,8 @@
 
 Das Stichspiel Wizard für 3–6 Spieler im Browser. Spielen geht ohne Account: Einer erstellt einen Raum und schickt den Link, die anderen treten bei.
 
+Unter `/3d` gibt es dieselbe Partie als 3D-Kneipe mit Low-Poly-Figuren (für Desktop). Beide Ansichten spielen im selben Raum zusammen, man kann jederzeit wechseln.
+
 ## Hausregel
 
 Wird eine **Fehlfarbe** ausgespielt, darf man **immer Trumpf** legen, auch wenn man die ausgespielte Farbe auf der Hand hat. Wird **Trumpf** ausgespielt, muss man Trumpf bedienen. Zauberer und Narren dürfen wie immer jederzeit gespielt werden.
@@ -65,3 +67,4 @@ node scripts/bots.js 6 --even  # … mit „Ansagen dürfen nicht aufgehen“
 | `server/server.js` | HTTP für die statischen Dateien und WebSocket unter `/ws` |
 | `server/index.js` | Startpunkt für `npm start` |
 | `public/` | Oberfläche (Vanilla JS, kein Build-Schritt) |
+| `public/3d/` | 3D-Ansicht mit Three.js (per Importmap vom CDN, kein Build-Schritt) |

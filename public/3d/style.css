@@ -200,6 +200,10 @@ input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
 .stat-chip.hit b { color: var(--ok); }
 .stat-chip.over b { color: var(--danger); }
 
+/* Bei Rundenende/Spielende zeigt die Tabelle alles – Status und Info-Leiste weg */
+.hud[data-phase="roundEnd"] .status, .hud[data-phase="roundEnd"] .me-info,
+.hud[data-phase="gameOver"] .status, .hud[data-phase="gameOver"] .me-info { display: none; }
+
 /* Aktionen (Ansage, Trumpfwahl, Ergebnis) mitten über dem Tisch */
 .actions {
   position: absolute; left: 50%; top: 47%; transform: translate(-50%, -50%);
@@ -214,6 +218,8 @@ input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
   padding: 16px 18px;
   display: grid; gap: 12px; justify-items: center;
   width: 100%;
+  max-height: calc(100vh - 140px);
+  overflow: auto;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(8px);
   animation: rise 0.3s ease-out;

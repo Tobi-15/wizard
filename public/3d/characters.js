@@ -290,20 +290,15 @@ export class Character {
       hatTop = top + 0.45;
     } else if (k === 'pirate') {
       part(face, CONE(6), hair, { p: [0, -HR * 0.82, HR * 0.6], r: [Math.PI + 0.2, 0, 0], s: [HR * 0.25, HR * 0.4, HR * 0.2] });
-      // Dreispitz: Kuppel plus drei hochgeklappte Krempen
+      // Dreispitz: Kuppel in einer nach oben aufgeklappten, dreieckigen Krempe (Spitze nach vorn)
       const hat = new THREE.Group();
-      hat.position.set(0, top - 0.07, 0);
-      hat.rotation.x = -0.08;
+      hat.position.set(0, top - 0.08, 0);
+      hat.rotation.x = -0.1;
       head.add(hat);
-      part(hat, HEMI(), '#1f1a17', { p: [0, 0, 0], s: [HR * 0.98, HR * 0.95, HR * 0.98] });
-      for (let i = 0; i < 3; i++) {
-        const a = (i / 3) * Math.PI * 2;
-        const brim = new THREE.Group();
-        brim.rotation.y = a;
-        hat.add(brim);
-        part(brim, BOX(), '#1f1a17', { p: [0, 0.05, HR * 0.95], r: [-0.55, 0, 0], s: [HR * 1.6, 0.11, 0.03] });
-        part(brim, BOX(), '#e9c46a', { p: [0, 0.1, HR * 0.98], r: [-0.55, 0, 0], s: [HR * 1.6, 0.015, 0.035] });
-      }
+      part(hat, HEMI(), '#1f1a17', { p: [0, 0.02, 0], s: [HR * 0.98, HR * 0.95, HR * 0.98] });
+      const TRI = geo('tricorn', () => new THREE.CylinderGeometry(1.3, 1, 1, 3));
+      part(hat, TRI, '#1f1a17', { p: [0, 0.05, 0], s: [HR * 1.3, 0.11, HR * 1.3] });
+      part(hat, TRI, '#e9c46a', { p: [0, 0.108, 0], s: [HR * 1.35, 0.012, HR * 1.35] });
       hatTop = top + 0.16;
     } else if (k === 'goblin') {
       const hood = part(head, SPH(), this.cloth, { p: [0, cy + 0.02, -0.04], s: [HR * 1.14, HR * 1.16, HR * 1.08] });

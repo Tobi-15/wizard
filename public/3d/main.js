@@ -358,6 +358,7 @@ function renderGame() {
   const crowns = leaders(g);
 
   document.title = myTurn ? '● Du bist dran – Wizard' : `Wizard · Runde ${g.round}`;
+  $('hud').dataset.phase = g.phase;
   renderSoundButton();
 
   $('g-round').textContent = `Runde ${g.round} / ${g.maxRounds}`;

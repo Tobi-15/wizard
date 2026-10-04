@@ -32,6 +32,7 @@ Das Kartenspiel Wizard (3–6 Spieler) als Browser-Spiel. Tobi spielt es mit Fre
 | `public/style.css` | Bewusst nur ein dunkles Design (Filz, Holz, Gold), Schriften Cinzel + Nunito Sans (Google Fonts) |
 | `public/img/cards/` | Zugeschnittene Bilder für Zauberer/Narren (`z1–z4.jpg`, `n1–n4.jpg`) |
 | `scripts/bots.js` | Ende-zu-Ende-Test: N Bots spielen ein ganzes Spiel über echte WebSockets |
+| `public/3d/` | 3D-Client unter `/3d` (siehe Abschnitt unten) |
 
 **Protokoll** (JSON über WebSocket):
 - Client → Server: `create`, `join`, `leave`, `setOption`, `start`, `chooseTrump`, `bid`, `play`, `nextRound`, `backToLobby`
@@ -51,6 +52,20 @@ URL=wss://wizard-zryw.onrender.com/ws TIMEOUT_MS=240000 node scripts/bots.js 6  
 
 **Oberfläche testen:** Chromium liegt unter `/usr/bin/chromium`. `puppeteer-core` ist nicht im Projekt, sondern wird bei Bedarf in einen temporären Ordner installiert. Jeder Spieler braucht einen eigenen `browser.createBrowserContext()`, weil das localStorage-Token sonst geteilt wird. Sinnvoll ist, Screenshots in Desktop-Größe (1200×860) und Handy-Größe (390×844) anzusehen.
 
+## 3D-Client (`/3d`, Branch `3d-client`)
+
+Wizard in einer stilisierten Low-Poly-Kneipe („Liar's Bar“-Stil, aber komplett eigene Assets). Nur für Desktop gedacht (Entscheidung von Tobi).
+
+- Liegt in `public/3d/`, ES-Module ohne Build. Three.js kommt per Importmap gepinnt vom CDN (`three@0.180.0`, jsDelivr). Kneipe, Tisch und Figuren werden im Code aus Grundkörpern gebaut, Texturen per Canvas – es gibt keine 3D-Dateien.
+- Gleiches Protokoll und gleiche localStorage-Schlüssel (`wizard.token`, `wizard.name`, `wizard.room`) wie der 2D-Client. Man kann jederzeit wechseln, auch mitten im Spiel (Knöpfe „2D“ bzw. „3D“).
+- `main.js`: Verbindung, HUD-Overlays (Lobby, Ansage, Trumpfwahl, Ergebnis, Dialoge), Namensschilder, Maus/Tastatur, Renderloop. `table.js`: gleicht den Serverzustand mit der Szene ab und animiert die Unterschiede (Austeilen, Ausspielen, Stich einsammeln, Stichstapel), eigene Hand mit Raycasting, Kamera-Fitting. `characters.js`: 8 Figurentypen mit IK-Armen, Idle-Animation und Reaktionen; die Zuordnung Spieler → Figur hängt nur von Id und Sitzreihenfolge ab, alle sehen also dieselben Figuren. `scene.js`: Raum, Licht, Nebel, Staub, Rauch, Pixelratio-Anpassung. `cards.js`: Kartenbilder. `layout.js`: Tischgeometrie. `util.js`: Tweens.
+- `CARD_ART` steht doppelt in `public/client.js` und `public/3d/cards.js`. Bei neuen Kartenbildern beide anpassen.
+- Server: `server.js` liefert für Verzeichnisse die `index.html` und leitet `/3d` auf `/3d/` um. Spiellogik und Protokoll sind unverändert.
+- Leistung: Auf Tobis MacBook (Iris Plus 650) 60 FPS bei 1200×860. Bei Retina-Pixelratio 2 wird es eng, deshalb senkt `scene.js` die Pixelratio schrittweise, wenn die Bildrate dauerhaft unter 40 FPS liegt (`?hq` schaltet das ab). Schatten und Effekte bleiben immer an.
+- **Testen:** Chromium headless mit echter GPU starten: `--enable-gpu --use-angle=gl --ignore-gpu-blocklist`. Mit SwiftShader gibt es nur ~2 FPS, dann laufen die Animationen nicht sauber. `window.wizard3d.handPoints()` liefert die Bildschirmpositionen der eigenen Karten, so lassen sich echte Mausklicks (Raycasting) testen.
+- **Stolperfalle Runde:** Alles, was zu einer Runde gehört, hängt an `table.roundRoot`. Sonst bleiben Karten liegen, wenn die nächste Runde startet, während noch ein Stich zum Gewinner fliegt.
+- **Stolperfalle Kamera:** Die Kamera darf nicht über die Deckenbalken (3,25 m). Ist der Bildbereich schmal (Lobby mit Panel links), wird der Blick flacher statt höher.
+
 ## Kartenbilder ändern
 
 1. Tobi legt Originale in `public/img/` ab. Die sind per `.gitignore` vom Repo ausgeschlossen.
@@ -60,7 +75,7 @@ URL=wss://wizard-zryw.onrender.com/ws TIMEOUT_MS=240000 node scripts/bots.js 6  
      -modulate 100,106 -unsharp 0x0.8 -quality 86 public/img/cards/z1.jpg
    ```
    Den Ausschnitt vorher am Bild abschätzen und das Ergebnis ansehen.
-3. Die Zuordnung Karte → Bild steht in `CARD_ART` in `public/client.js` (Karten-IDs `Z1–Z4`, `N1–N4`). Karten ohne Eintrag zeigen den goldenen Stern bzw. die Narrenkappe.
+3. Die Zuordnung Karte → Bild steht in `CARD_ART` in `public/client.js` und `public/3d/cards.js` (Karten-IDs `Z1–Z4`, `N1–N4`). Karten ohne Eintrag zeigen den goldenen Stern bzw. die Narrenkappe.
 
 Aktuelle Belegung: Z1 Epstein, Z2 Charlie Kirk, Z3 Mann mit Burger-King-Krone, Z4 Netanyahu, N1–N4 Freunde von Tobi bzw. eine Asterix-Figur (N2).
 
