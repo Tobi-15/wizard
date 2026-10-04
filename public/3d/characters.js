@@ -1,0 +1,597 @@
+// Prozedurale Low-Poly-Kneipengäste aus Three.js-Grundkörpern (keine externen Modelle).
+// Jeder Gast sitzt auf einem Stuhl, schaut +z (zum Tisch), hält seine Karten als Fächer
+// und hat Idle-Animation (Atmen, Umschauen, Blinzeln) sowie Reaktionen.
+
+import * as THREE from 'three';
+import { rng, clamp, envelope, smooth } from './util.js';
+import { backMaterial, cardGeometry } from './cards.js';
+
+// ---------- Material- und Geometrie-Cache ----------
+const mats = new Map();
+export function flat(color, opts = {}) {
+  const key = `${color}|${JSON.stringify(opts)}`;
+  let m = mats.get(key);
+  if (!m) {
+    m = new THREE.MeshLambertMaterial({ color, flatShading: true, ...opts });
+    mats.set(key, m);
+  }
+  return m;
+}
+
+const G = new Map();
+const geo = (key, make) => {
+  let g = G.get(key);
+  if (!g) G.set(key, (g = make()));
+  return g;
+};
+const ICO1 = () => geo('ico1', () => new THREE.IcosahedronGeometry(1, 1));
+const ICO0 = () => geo('ico0', () => new THREE.IcosahedronGeometry(1, 0));
+const SPH = () => geo('sph', () => new THREE.SphereGeometry(1, 8, 6));
+const HEMI = () => geo('hemi', () => new THREE.SphereGeometry(1, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2));
+const BOX = () => geo('box', () => new THREE.BoxGeometry(1, 1, 1));
+const CYL = (seg = 8) => geo(`cyl${seg}`, () => new THREE.CylinderGeometry(1, 1, 1, seg));
+const CONE = (seg = 8) => geo(`cone${seg}`, () => new THREE.ConeGeometry(1, 1, seg));
+const TORUS = (arc = Math.PI * 2) => geo(`torus${arc.toFixed(3)}`, () => new THREE.TorusGeometry(1, 0.22, 5, 12, arc));
+const LIMB = (r1, r2, len) =>
+  geo(`limb${r1}|${r2}|${len}`, () => new THREE.CylinderGeometry(r1, r2, len, 6).translate(0, -len / 2, 0));
+const LATHE = (name, pts) =>
+  geo(`lathe-${name}`, () => new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x, y)), 8));
+const FAN_CARD = () => geo('fancard', () => cardGeometry().clone().translate(0, 0.5, 0));
+
+function part(parent, geometry, color, { p, r, s, shadow = true, mat } = {}) {
+  const m = new THREE.Mesh(geometry, mat ?? flat(color));
+  if (p) m.position.set(p[0], p[1], p[2]);
+  if (r) m.rotation.set(r[0], r[1], r[2]);
+  if (s !== undefined) typeof s === 'number' ? m.scale.setScalar(s) : m.scale.set(s[0], s[1], s[2]);
+  m.castShadow = shadow;
+  m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+
+// ---------- Typen ----------
+const HUMAN = ['#f1c7a5', '#e0ac85', '#c68b62', '#a06a45', '#6e4329'];
+const PROFILES = {
+  normal: [[0, 0], [0.22, 0], [0.25, 0.1], [0.25, 0.28], [0.24, 0.42], [0.19, 0.52], [0.08, 0.58], [0, 0.585]],
+  stout: [[0, 0], [0.27, 0], [0.31, 0.14], [0.3, 0.3], [0.27, 0.44], [0.2, 0.53], [0.09, 0.58], [0, 0.585]],
+  slim: [[0, 0], [0.19, 0], [0.21, 0.12], [0.21, 0.3], [0.21, 0.42], [0.17, 0.52], [0.07, 0.58], [0, 0.585]],
+};
+const SHOULDER = { normal: 0.25, stout: 0.29, slim: 0.215 };
+
+export const ARCHETYPES = [
+  { key: 'wizard', build: 'slim', skins: ['#f1c7a5', '#e0ac85'], cloths: ['#4b3a8c', '#2f5a8c', '#7a2f5a'], hair: '#ece8de', pants: '#2a2340' },
+  { key: 'pirate', build: 'normal', skins: HUMAN, cloths: ['#e9e1cf'], sash: ['#a32626', '#2a5a9c', '#3a7a3a'], hair: '#1f1611', pants: '#2a2018' },
+  { key: 'goblin', build: 'slim', skins: ['#7fa35a', '#8fb05e', '#6d9a4f'], cloths: ['#6b4a2b', '#4a5a2b', '#5a3a4a'], hair: '#2a1a0a', pants: '#3a2a18', headR: 0.19 },
+  { key: 'dwarf', build: 'stout', skins: ['#e3a882', '#d09070', '#b47a58'], cloths: ['#7a4b2a', '#2f5a3a', '#8a2f2a'], hair: '#c0602a', pants: '#3a2a1a' },
+  { key: 'witch', build: 'slim', skins: ['#f3d2bb', '#e8c0a0', '#c9e0b4'], cloths: ['#3a2a4a', '#24402e', '#5a1f2e'], hair: '#9a3a3a', pants: '#1d1826' },
+  { key: 'gentleman', build: 'normal', skins: HUMAN, cloths: ['#2b2b33', '#3a2a2a', '#1f2a3a'], hair: '#3b2a1d', pants: '#1f1f24' },
+  { key: 'cowboy', build: 'normal', skins: HUMAN, cloths: ['#8a5a32', '#5a6a7a', '#6a3a2a'], hair: '#4a2f1a', pants: '#3a4a6a' },
+  { key: 'orc', build: 'stout', skins: ['#8a9a72', '#7a8a6a', '#96a07a'], cloths: ['#5b3b2b', '#3b3b3b', '#4a2a2a'], hair: '#1a1a1a', pants: '#2a2018' },
+];
+
+/**
+ * Verteilt Typen auf die Sitzplätze: jeder Spieler bekommt nach Möglichkeit seinen
+ * „Wunschtyp“ aus seiner Id; doppelte werden der Reihe nach weitergeschoben.
+ * Alle Clients rechnen gleich, also sieht jeder dieselben Figuren.
+ */
+export function assignArchetypes(ids, hash) {
+  const used = new Set();
+  return ids.map((id) => {
+    let k = hash(id) % ARCHETYPES.length;
+    while (used.has(k) && used.size < ARCHETYPES.length) k = (k + 1) % ARCHETYPES.length;
+    used.add(k);
+    return k;
+  });
+}
+
+const DARK = '#2a1512';
+const _v = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _d = new THREE.Vector3();
+const _pp = new THREE.Vector3();
+const _u = new THREE.Vector3();
+const _x = new THREE.Vector3();
+const _y = new THREE.Vector3();
+const _z = new THREE.Vector3();
+const _f = new THREE.Vector3();
+const _m = new THREE.Matrix4();
+
+export class Character {
+  constructor(archIndex, seed) {
+    const A = ARCHETYPES[archIndex % ARCHETYPES.length];
+    const R = rng(seed);
+    const pick = (arr) => arr[Math.floor(R() * arr.length)];
+    this.A = A;
+    this.skin = pick(A.skins);
+    this.cloth = pick(A.cloths);
+    this.accent = A.sash ? pick(A.sash) : '#e9c46a';
+    this.phase = R() * 100;
+    this.root = new THREE.Group();
+    this.reactions = [];
+    this.turn = false;
+    this.turnSince = 0;
+    this.count = 0;
+    this.blinkAt = 1 + R() * 3;
+    this.glanceAt = 0;
+    this.lookGoal = new THREE.Vector3(0, 0.8, 0);
+    this.look = new THREE.Vector3(0, 0.8, 0);
+    this.focus = new THREE.Vector3(0, 0.8, 0);
+    this.camPos = new THREE.Vector3(0, 1.4, 3);
+    this.yaw = 0;
+    this.pitch = 0.2;
+    this.mood = 'neutral';
+
+    this.buildChair();
+    this.buildBody(A);
+    this.buildHead(A, R);
+    this.left = this.buildArm(1);
+    this.right = this.buildArm(-1);
+    this.fan = new THREE.Group();
+    this.body.add(this.fan);
+    this.base = {
+      left: new THREE.Vector3(0.11, 0.36, 0.36),
+      right: new THREE.Vector3(-0.1, 0.33, 0.37),
+    };
+    this.labelAnchor = new THREE.Object3D();
+    this.labelAnchor.position.set(0, this.topY + 0.16, 0);
+    this.root.add(this.labelAnchor);
+    this.root.traverse((o) => (o.userData.character = this));
+  }
+
+  // ---------- Aufbau ----------
+  buildChair() {
+    const wood = '#4a2e1a';
+    const dark = '#3a2213';
+    const c = new THREE.Group();
+    part(c, BOX(), wood, { p: [0, 0.44, -0.04], s: [0.52, 0.06, 0.48] });
+    for (const [x, z] of [[-0.22, 0.16], [0.22, 0.16], [-0.22, -0.24], [0.22, -0.24]]) {
+      part(c, BOX(), dark, { p: [x, 0.21, z], s: [0.05, 0.44, 0.05] });
+    }
+    for (const x of [-0.22, 0.22]) part(c, BOX(), dark, { p: [x, 0.78, -0.27], s: [0.05, 0.66, 0.05] });
+    part(c, BOX(), wood, { p: [0, 1.06, -0.27], s: [0.56, 0.11, 0.06] });
+    part(c, BOX(), wood, { p: [0, 0.84, -0.27], s: [0.44, 0.06, 0.04] });
+    this.root.add(c);
+  }
+
+  buildBody(A) {
+    const body = (this.body = new THREE.Group());
+    body.position.set(0, 0.5, 0);
+    this.root.add(body);
+    const prof = PROFILES[A.build];
+    this.shoulderW = SHOULDER[A.build];
+    part(body, LATHE(A.build, prof), this.cloth, { s: [1, 1, 0.82] });
+    // Beine (meist unter dem Tisch)
+    for (const x of [-0.11, 0.11]) {
+      part(this.root, BOX(), A.pants, { p: [x, 0.5, 0.17], s: [0.14, 0.13, 0.42] });
+      part(this.root, BOX(), A.pants, { p: [x, 0.26, 0.36], s: [0.12, 0.46, 0.12] });
+      part(this.root, BOX(), '#1f140c', { p: [x, 0.04, 0.4], s: [0.13, 0.08, 0.2] });
+    }
+    const top = prof.at(-2)[1];
+    const k = A.key;
+    if (k === 'pirate') {
+      part(body, TORUS(), this.accent, { p: [0, 0.16, 0], r: [Math.PI / 2, 0, 0], s: [0.255, 0.21, 0.4] });
+      part(body, BOX(), '#a07a5a', { p: [0, 0.42, 0.17], r: [0.3, 0, 0], s: [0.1, 0.12, 0.02] });
+    } else if (k === 'wizard') {
+      part(body, TORUS(), '#e9c46a', { p: [0, 0.01, 0], r: [Math.PI / 2, 0, 0], s: [0.21, 0.17, 0.3] });
+      part(body, TORUS(), '#e9c46a', { p: [0, 0.5, 0], r: [Math.PI / 2, 0, 0], s: [0.17, 0.14, 0.4] });
+      part(body, ICO0(), '#e9c46a', { p: [0.1, 0.36, 0.19], s: 0.035 });
+    } else if (k === 'dwarf' || k === 'orc') {
+      part(body, TORUS(), '#3a2414', { p: [0, 0.15, 0], r: [Math.PI / 2, 0, 0], s: [0.305, 0.25, 0.35] });
+      part(body, BOX(), '#e9c46a', { p: [0, 0.15, 0.25], s: [0.08, 0.06, 0.03] });
+      if (k === 'orc') part(body, HEMI(), '#8d959e', { p: [-0.22, 0.47, 0], r: [0, 0, 0.6], s: [0.12, 0.08, 0.12] });
+    } else if (k === 'gentleman') {
+      part(body, BOX(), '#f1ece0', { p: [0, 0.4, 0.15], r: [0.2, 0, 0], s: [0.12, 0.2, 0.04] });
+      part(body, CONE(4), '#8f1d2c', { p: [0.04, 0.5, 0.17], r: [0, 0, -Math.PI / 2], s: [0.035, 0.07, 0.02] });
+      part(body, CONE(4), '#8f1d2c', { p: [-0.04, 0.5, 0.17], r: [0, 0, Math.PI / 2], s: [0.035, 0.07, 0.02] });
+    } else if (k === 'cowboy') {
+      part(body, CONE(3), '#d8c8a8', { p: [0, 0.47, 0.155], r: [Math.PI, 0, 0], s: [0.07, 0.14, 0.03] });
+      part(body, TORUS(), '#3a2414', { p: [0, 0.08, 0], r: [Math.PI / 2, 0, 0], s: [0.255, 0.21, 0.35] });
+    } else if (k === 'witch') {
+      part(body, ICO0(), '#4cc38a', { p: [0, 0.47, 0.16], s: 0.03, mat: flat('#4cc38a', { emissive: '#1a6a3a' }) });
+      part(body, TORUS(), '#2a1a2a', { p: [0, 0.52, 0], r: [Math.PI / 2, 0, 0], s: [0.15, 0.12, 0.5] });
+    } else if (k === 'goblin') {
+      part(body, CONE(8), this.cloth, { p: [0, 0.5, -0.03], s: [0.27, 0.16, 0.24] });
+    }
+    this.neckY = top;
+  }
+
+  buildHead(A, R) {
+    const HR = A.headR ?? 0.2;
+    this.HR = HR;
+    const neck = (this.neck = new THREE.Group());
+    neck.position.set(0, 0.55, 0);
+    this.body.add(neck);
+    part(neck, CYL(6), this.skin, { p: [0, 0.04, 0], s: [0.07, 0.1, 0.07] });
+    const head = (this.head = new THREE.Group());
+    head.position.set(0, 0.07, 0);
+    head.rotation.order = 'YXZ';
+    neck.add(head);
+    const cy = HR * 0.92;
+    part(head, ICO1(), this.skin, { p: [0, cy, 0], s: [HR, HR * 1.06, HR * 0.96] });
+    const face = (this.face = new THREE.Group());
+    face.position.set(0, cy, 0);
+    head.add(face);
+    const fz = HR * 0.84;
+    const k = A.key;
+
+    // Augen
+    const sclera = k === 'goblin' ? '#f0e070' : '#f6f2e8';
+    this.eyes = [];
+    for (const sx of [-1, 1]) {
+      const e = new THREE.Group();
+      e.position.set(sx * HR * 0.37, HR * 0.14, fz);
+      face.add(e);
+      part(e, SPH(), sclera, { s: [HR * 0.21, HR * 0.23, HR * 0.13], shadow: false });
+      part(e, SPH(), '#1a1210', { p: [0, -HR * 0.01, HR * 0.1], s: [HR * 0.1, HR * 0.12, HR * 0.06], shadow: false });
+      this.eyes.push(e);
+    }
+    if (k === 'pirate') {
+      // Augenklappe über dem rechten Auge
+      part(face, CYL(8), '#111', { p: [-HR * 0.37, HR * 0.14, fz + 0.012], r: [Math.PI / 2, 0, 0], s: [HR * 0.25, 0.02, HR * 0.25] });
+      part(face, TORUS(), '#111', { p: [0, HR * 0.32, 0], r: [0.25, 0, 0], s: [HR * 0.99, HR * 0.99, 0.04] });
+      this.eyes[0].visible = false;
+    }
+    // Augenbrauen
+    const browColor = k === 'wizard' ? '#f4f1ea' : k === 'dwarf' ? A.hair : k === 'orc' ? '#1a1a1a' : DARK;
+    const browW = k === 'wizard' || k === 'dwarf' || k === 'orc' ? 1.5 : 1;
+    this.brows = [-1, 1].map((sx) =>
+      part(face, BOX(), browColor, { p: [sx * HR * 0.37, HR * 0.43, fz + 0.005], s: [HR * 0.4 * browW, HR * 0.09 * browW, 0.03], shadow: false }),
+    );
+    this.brows.forEach((b, i) => (b.userData.sx = i === 0 ? -1 : 1));
+
+    // Nase
+    const nz = HR * 0.93;
+    if (k === 'goblin') part(face, CONE(6), this.skin, { p: [0, -HR * 0.05, nz + 0.06], r: [Math.PI / 2 - 0.25, 0, 0], s: [0.045, 0.2, 0.045] });
+    else if (k === 'witch' || k === 'wizard') part(face, CONE(6), this.skin, { p: [0, -HR * 0.06, nz + 0.03], r: [Math.PI / 2 + 0.3, 0, 0], s: [0.035, 0.12, 0.04] });
+    else if (k === 'orc') part(face, SPH(), this.skin, { p: [0, -HR * 0.08, nz], s: [0.06, 0.04, 0.04] });
+    else part(face, ICO0(), this.skin, { p: [0, -HR * 0.08, nz], s: [0.045, 0.05, 0.045] });
+
+    // Mund (vier Varianten für Mimik)
+    const lip = k === 'witch' ? '#a8243a' : '#4a1d1a';
+    const mouth = new THREE.Group();
+    mouth.position.set(0, -HR * 0.45, fz - 0.005);
+    face.add(mouth);
+    this.mouth = {
+      neutral: part(mouth, BOX(), lip, { s: [HR * 0.38, 0.014, 0.03], shadow: false }),
+      smile: part(mouth, TORUS(Math.PI), lip, { p: [0, 0.02, 0], r: [0, 0, Math.PI], s: [HR * 0.2, HR * 0.2, 0.02], shadow: false }),
+      frown: part(mouth, TORUS(Math.PI), lip, { p: [0, -0.025, 0], s: [HR * 0.18, HR * 0.15, 0.02], shadow: false }),
+      open: part(mouth, SPH(), '#3a0f0f', { s: [HR * 0.17, HR * 0.15, 0.03], shadow: false }),
+    };
+    this.setMouth('smile');
+    if (k === 'orc') {
+      for (const sx of [-1, 1]) part(face, CONE(5), '#f2ead6', { p: [sx * HR * 0.25, -HR * 0.38, fz + 0.02], s: [0.018, 0.06, 0.018] });
+    }
+
+    // Ohren
+    if (k === 'goblin') {
+      for (const sx of [-1, 1]) part(face, CONE(5), this.skin, { p: [sx * HR * 1.25, HR * 0.15, -0.02], r: [0, 0, -sx * 1.25], s: [0.06, 0.26, 0.03] });
+    } else if (k === 'orc') {
+      for (const sx of [-1, 1]) part(face, CONE(5), this.skin, { p: [sx * HR * 1.05, HR * 0.1, -0.02], r: [0, 0, -sx * 1.1], s: [0.04, 0.12, 0.025] });
+    } else if (k !== 'witch') {
+      for (const sx of [-1, 1]) part(face, ICO0(), this.skin, { p: [sx * HR * 0.98, 0, 0], s: [0.03, 0.055, 0.04] });
+      if (k === 'pirate') part(face, TORUS(), '#e9c46a', { p: [HR * 1.0, -0.06, 0.01], r: [0, Math.PI / 2, 0], s: 0.02 });
+    }
+
+    // Haare, Bärte, Hüte
+    const top = cy + HR * 1.06; // Scheitel relativ zum Kopf
+    let hatTop = top;
+    const hair = A.hair;
+    if (k === 'wizard') {
+      part(face, CONE(7), hair, { p: [0, -HR * 1.12, HR * 0.5], r: [Math.PI + 0.25, 0, 0], s: [HR * 0.8, HR * 1.8, HR * 0.55] });
+      for (const sx of [-1, 1]) part(face, CONE(5), hair, { p: [sx * HR * 0.18, -HR * 0.32, fz + 0.01], r: [0, 0, sx * 1.9], s: [0.03, 0.12, 0.025] });
+      part(head, CYL(10), '#2f2a6b', { p: [0, top - 0.03, 0], s: [HR * 1.4, 0.025, HR * 1.4] });
+      const hat = new THREE.Group();
+      hat.position.set(0, top - 0.03, 0);
+      hat.rotation.set(-0.18, 0, 0.08);
+      head.add(hat);
+      part(hat, CONE(8), '#2f2a6b', { p: [0, 0.24, 0], s: [HR * 0.95, 0.48, HR * 0.95] });
+      part(hat, CYL(8), '#e9c46a', { p: [0, 0.035, 0], s: [HR * 0.93, 0.04, HR * 0.93] });
+      part(hat, ICO0(), '#e9c46a', { p: [0.06, 0.2, HR * 0.6], s: 0.035, mat: flat('#e9c46a', { emissive: '#6a5010' }) });
+      hatTop = top + 0.45;
+    } else if (k === 'pirate') {
+      part(face, CONE(6), hair, { p: [0, -HR * 0.82, HR * 0.6], r: [Math.PI + 0.2, 0, 0], s: [HR * 0.25, HR * 0.4, HR * 0.2] });
+      // Dreispitz: Kuppel plus drei hochgeklappte Krempen
+      const hat = new THREE.Group();
+      hat.position.set(0, top - 0.07, 0);
+      hat.rotation.x = -0.08;
+      head.add(hat);
+      part(hat, HEMI(), '#1f1a17', { p: [0, 0, 0], s: [HR * 0.98, HR * 0.95, HR * 0.98] });
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2;
+        const brim = new THREE.Group();
+        brim.rotation.y = a;
+        hat.add(brim);
+        part(brim, BOX(), '#1f1a17', { p: [0, 0.05, HR * 0.95], r: [-0.55, 0, 0], s: [HR * 1.6, 0.11, 0.03] });
+        part(brim, BOX(), '#e9c46a', { p: [0, 0.1, HR * 0.98], r: [-0.55, 0, 0], s: [HR * 1.6, 0.015, 0.035] });
+      }
+      hatTop = top + 0.16;
+    } else if (k === 'goblin') {
+      const hood = part(head, SPH(), this.cloth, { p: [0, cy + 0.02, -0.04], s: [HR * 1.14, HR * 1.16, HR * 1.08] });
+      hood.material = flat(this.cloth, { side: THREE.BackSide });
+      part(head, HEMI(), this.cloth, { p: [0, cy + 0.03, -0.03], r: [-0.5, 0, 0], s: [HR * 1.12, HR * 1.12, HR * 1.06] });
+      hatTop = top + 0.04;
+    } else if (k === 'dwarf') {
+      part(face, ICO1(), hair, { p: [0, -HR * 0.75, HR * 0.55], s: [HR * 0.95, HR * 0.8, HR * 0.6] });
+      part(face, CONE(6), hair, { p: [0, -HR * 1.5, HR * 0.6], r: [Math.PI + 0.15, 0, 0], s: [HR * 0.6, HR * 0.9, HR * 0.4] });
+      for (const sx of [-1, 1]) part(face, CONE(5), hair, { p: [sx * HR * 0.2, -HR * 0.3, fz + 0.02], r: [0, 0, sx * 1.8], s: [0.04, 0.14, 0.03] });
+      part(head, HEMI(), '#8d959e', { p: [0, cy + HR * 0.42, -0.01], r: [-0.12, 0, 0], s: [HR * 1.06, HR * 0.95, HR * 1.04] });
+      part(head, TORUS(), '#6d757e', { p: [0, cy + HR * 0.44, -0.01], r: [Math.PI / 2 - 0.12, 0, 0], s: [HR * 1.04, HR * 1.0, 0.12] });
+      for (const sx of [-1, 1]) {
+        part(head, CONE(6), '#efe6cf', { p: [sx * HR * 1.12, cy + HR * 0.9, 0], r: [0, 0, -sx * 0.75], s: [0.05, 0.22, 0.05] });
+      }
+      hatTop = top + 0.12;
+    } else if (k === 'witch') {
+      part(head, BOX(), hair, { p: [0, cy - HR * 0.6, -HR * 0.55], s: [HR * 2.0, HR * 2.6, HR * 0.6] });
+      part(head, HEMI(), hair, { p: [0, cy + 0.01, -0.02], r: [-0.75, 0, 0], s: [HR * 1.06, HR * 1.08, HR * 1.02] });
+      part(head, CYL(12), '#1d1826', { p: [0, top - 0.02, 0], s: [HR * 1.55, 0.022, HR * 1.55] });
+      const hat = new THREE.Group();
+      hat.position.set(0, top - 0.01, 0);
+      head.add(hat);
+      part(hat, CONE(8), '#1d1826', { p: [0, 0.16, 0], s: [HR * 0.95, 0.32, HR * 0.95] });
+      part(hat, CONE(6), '#1d1826', { p: [0.04, 0.38, -0.04], r: [-0.5, 0, -0.4], s: [HR * 0.38, 0.2, HR * 0.38] });
+      part(hat, CYL(8), '#7a3fa0', { p: [0, 0.03, 0], s: [HR * 0.93, 0.04, HR * 0.93] });
+      hatTop = top + 0.45;
+    } else if (k === 'gentleman') {
+      for (const sx of [-1, 1]) {
+        part(face, CONE(5), hair, { p: [sx * HR * 0.22, -HR * 0.3, fz + 0.02], r: [0, 0, sx * 2.1], s: [0.03, 0.13, 0.025] });
+      }
+      part(face, TORUS(), '#e9c46a', { p: [HR * 0.37, HR * 0.14, fz + 0.04], s: [HR * 0.26, HR * 0.26, 0.15] });
+      part(head, HEMI(), hair, { p: [0, cy - 0.01, -0.02], r: [-0.8, 0, 0], s: [HR * 1.05, HR * 0.95, HR * 1.02] });
+      part(head, CYL(12), '#1a1a1f', { p: [0, top - 0.05, 0], s: [HR * 1.45, 0.02, HR * 1.45] });
+      part(head, CYL(10), '#1a1a1f', { p: [0, top + 0.1, 0], s: [HR * 0.82, 0.3, HR * 0.82] });
+      part(head, CYL(10), '#7a1d2c', { p: [0, top - 0.01, 0], s: [HR * 0.84, 0.05, HR * 0.84] });
+      hatTop = top + 0.25;
+    } else if (k === 'cowboy') {
+      part(face, BOX(), hair, { p: [0, -HR * 0.28, fz + 0.025], s: [HR * 0.7, 0.04, 0.04] });
+      part(face, CONE(4), this.accent === '#e9c46a' ? '#b8322f' : '#b8322f', { p: [0, -HR * 1.25, HR * 0.6], r: [Math.PI + 0.3, Math.PI / 4, 0], s: [HR * 0.6, HR * 0.5, HR * 0.3] });
+      part(head, CYL(12), '#6b4a2a', { p: [0, top - 0.05, 0], s: [HR * 1.6, 0.02, HR * 1.45] });
+      part(head, CYL(8), '#6b4a2a', { p: [0, top + 0.03, 0], s: [HR * 0.85, 0.17, HR * 0.95] });
+      part(head, CYL(8), '#2a1a0f', { p: [0, top - 0.03, 0], s: [HR * 0.87, 0.04, HR * 0.97] });
+      hatTop = top + 0.13;
+    } else if (k === 'orc') {
+      for (let i = 0; i < 5; i++) {
+        part(head, BOX(), hair, { p: [0, top - 0.01 + Math.sin((i / 4) * Math.PI) * 0.02, HR * (0.6 - i * 0.3)], s: [0.04, 0.08, 0.07] });
+      }
+      hatTop = top + 0.06;
+    }
+    this.topY = 0.5 + 0.55 + 0.07 + hatTop; // Weltkoordinate relativ zum Stuhlboden
+  }
+
+  buildArm(side) {
+    const sh = new THREE.Group();
+    sh.position.set(side * this.shoulderW, 0.45, 0);
+    this.body.add(sh);
+    part(sh, ICO0(), this.cloth, { s: 0.075 });
+    const L1 = 0.27;
+    const L2 = 0.26;
+    part(sh, LIMB(0.062, 0.052, L1), this.cloth);
+    const elbow = new THREE.Group();
+    elbow.position.y = -L1;
+    sh.add(elbow);
+    part(elbow, LIMB(0.052, 0.045, L2), this.cloth);
+    const cuffColor = this.A.key === 'wizard' ? '#e9c46a' : this.A.key === 'gentleman' ? '#f1ece0' : this.cloth;
+    part(elbow, CYL(6), cuffColor, { p: [0, -L2 + 0.02, 0], s: [0.05, 0.035, 0.05] });
+    const hand = part(elbow, ICO0(), this.skin, { p: [0, -L2 - 0.035, 0], s: [0.052, 0.06, 0.045] });
+    return { sh, elbow, hand, L1, L2: L2 + 0.035, side, target: new THREE.Vector3(), pole: new THREE.Vector3(side, -0.7, -0.45).normalize() };
+  }
+
+  // ---------- Steuerung ----------
+  setMouth(kind) {
+    for (const [k, m] of Object.entries(this.mouth)) m.visible = k === kind;
+  }
+
+  setCardCount(n) {
+    n = Math.max(0, Math.min(n, 20));
+    if (n === this.count) return;
+    this.count = n;
+    this.fan.clear();
+    const spread = Math.min(0.17, 1.3 / Math.max(n, 1));
+    for (let i = 0; i < n; i++) {
+      const m = new THREE.Mesh(FAN_CARD(), backMaterial());
+      m.castShadow = true;
+      m.scale.setScalar(0.17);
+      m.rotation.z = -(i - (n - 1) / 2) * spread;
+      m.position.set(0, 0, i * 0.0025);
+      this.fan.add(m);
+    }
+  }
+
+  /** Weltposition der obersten Karte im Fächer (für fliegende Karten). */
+  fanWorld(out = new THREE.Vector3()) {
+    return this.fan.localToWorld(out.set(0, 0.09, 0.02));
+  }
+
+  setTurn(on, t) {
+    if (on && !this.turn) this.turnSince = t;
+    this.turn = on;
+  }
+
+  /** Reaktion abspielen: play, bid, win, happy, sad, cheer, trump, wave, shock */
+  react(type, t, opts = {}) {
+    const dur = { play: 0.8, bid: 1.5, win: 1.6, happy: 1.5, sad: 2.2, cheer: 3.6, trump: 1.6, wave: 1.8, shock: 1.1 }[type] ?? 1;
+    // gleiche Reaktion nicht stapeln
+    this.reactions = this.reactions.filter((r) => r.type !== type);
+    this.reactions.push({ type, t0: t + (opts.delay ?? 0), dur, target: opts.target?.clone() });
+  }
+
+  // ---------- Animation ----------
+  update(t, dt) {
+    const ph = this.phase;
+    const breath = Math.sin(t * 1.7 + ph);
+    let lean = 0.05 + 0.02 * Math.sin(t * 0.55 + ph);
+    let roll = 0.025 * Math.sin(t * 0.43 + ph * 1.3);
+    let bodyY = 0.5 + breath * 0.004;
+    let headPitch = 0;
+    let headRoll = 0;
+    let browLift = 0;
+    let browTilt = 0;
+    let mouth = 'smile';
+    const L = this.left.target.copy(this.base.left);
+    const Rh = this.right.target.copy(this.base.right);
+    L.y += 0.008 * Math.sin(t * 1.1 + ph);
+    Rh.y += 0.01 * Math.sin(t * 1.3 + ph + 1);
+
+    // Am Zug: nachdenken, Hand ans Kinn
+    if (this.turn) {
+      const w = smooth(clamp((t - this.turnSince - 0.9) / 0.6, 0, 1));
+      Rh.lerp(_v.set(-0.04, 0.6, 0.21), w);
+      headRoll += 0.12 * w;
+      headPitch += 0.08 * w;
+      browTilt += 0.3 * w;
+      lean += 0.06 * w;
+      mouth = w > 0.5 ? 'neutral' : mouth;
+    }
+
+    for (const rx of this.reactions) {
+      const tau = (t - rx.t0) / rx.dur;
+      if (tau < 0) continue;
+      const e = envelope(tau, 0.22);
+      switch (rx.type) {
+        case 'play': {
+          const reach = Math.sin(Math.min(tau, 1) * Math.PI);
+          if (rx.target) {
+            this.body.worldToLocal(_v2.copy(rx.target));
+            _v2.y += 0.05;
+            Rh.lerp(_v2, reach * 0.85);
+          }
+          lean += 0.2 * reach;
+          headPitch += 0.15 * reach;
+          break;
+        }
+        case 'bid':
+          Rh.lerp(_v.set(-0.24, 0.88, 0.22), e);
+          headPitch += -0.1 * Math.sin(tau * Math.PI * 4) * e;
+          mouth = tau < 0.65 ? (Math.sin(tau * 28) > 0 ? 'open' : 'neutral') : 'smile';
+          browLift += 0.012 * e;
+          break;
+        case 'trump':
+          Rh.lerp(_v.set(-0.08, 0.5, 0.55), e);
+          mouth = tau < 0.6 ? (Math.sin(tau * 28) > 0 ? 'open' : 'neutral') : 'smile';
+          lean += 0.1 * e;
+          break;
+        case 'win': {
+          const pump = Math.sin(tau * Math.PI * 6) * 0.06;
+          Rh.lerp(_v.set(-0.3, 1.0 - pump, 0.12), e);
+          bodyY += 0.035 * e * Math.abs(Math.sin(tau * Math.PI * 3));
+          headPitch -= 0.25 * e;
+          lean -= 0.12 * e;
+          mouth = 'open';
+          browLift += 0.02 * e;
+          break;
+        }
+        case 'cheer': {
+          const pump = Math.sin(tau * Math.PI * 10) * 0.07;
+          L.lerp(_v.set(0.26, 1.05 + pump, 0.1), e);
+          Rh.lerp(_v.set(-0.26, 1.05 - pump, 0.1), e);
+          bodyY += 0.05 * e * Math.abs(Math.sin(tau * Math.PI * 5));
+          headPitch -= 0.3 * e;
+          mouth = 'open';
+          browLift += 0.02 * e;
+          break;
+        }
+        case 'happy':
+          headPitch += 0.14 * Math.sin(tau * Math.PI * 4) * e;
+          mouth = 'smile';
+          browLift += 0.015 * e;
+          break;
+        case 'sad':
+          headPitch += 0.35 * e;
+          lean += 0.12 * e;
+          bodyY -= 0.025 * e;
+          Rh.lerp(_v.set(-0.16, 0.26, 0.42), e);
+          mouth = 'frown';
+          browTilt -= 0.45 * e;
+          headRoll += 0.08 * Math.sin(tau * Math.PI * 3) * e;
+          break;
+        case 'shock':
+          lean -= 0.15 * e;
+          mouth = 'open';
+          browLift += 0.025 * e;
+          headPitch -= 0.08 * e;
+          break;
+        case 'wave':
+          Rh.lerp(_v.set(-0.3 + Math.sin(tau * 22) * 0.07, 0.92, 0.18), e);
+          mouth = 'smile';
+          break;
+      }
+    }
+    this.reactions = this.reactions.filter((r) => t - r.t0 < r.dur);
+
+    // Körper
+    const b = this.body;
+    b.position.y = bodyY;
+    b.rotation.set(lean, 0, roll);
+    b.scale.set(1 + breath * 0.007, 1 + breath * 0.01, 1 + breath * 0.007);
+
+    // Arme
+    this.solveArm(this.left);
+    this.solveArm(this.right);
+
+    // Kartenfächer bleibt in der linken Hand (die nur beim großen Jubel mit hochgeht)
+    this.fan.position.set(L.x - 0.03, L.y + 0.02, L.z + 0.03);
+    this.fan.rotation.set(-0.35, 0, 0.1);
+    this.fan.visible = this.count > 0;
+
+    // Blick
+    if (t > this.glanceAt) {
+      const r = Math.random();
+      if (r < 0.55) this.lookGoal.copy(this.focus);
+      else if (r < 0.8) this.lookGoal.copy(this.camPos);
+      else this.lookGoal.set((Math.random() - 0.5) * 4, 0.8 + Math.random() * 1.2, (Math.random() - 0.5) * 4);
+      this.glanceAt = t + 1.4 + Math.random() * 2.8;
+    }
+    if (this.turn) this.lookGoal.copy(this.fanWorld(_v));
+    const k = 1 - Math.exp(-dt * 5);
+    this.look.lerp(this.lookGoal, k);
+    this.neck.updateWorldMatrix(true, false);
+    this.neck.worldToLocal(_v.copy(this.look));
+    _v.y -= 0.07 + this.HR * 0.92;
+    const yaw = clamp(Math.atan2(_v.x, _v.z), -1.0, 1.0);
+    const pitch = clamp(Math.atan2(-_v.y, Math.hypot(_v.x, _v.z)), -0.45, 0.5);
+    this.yaw += (yaw - this.yaw) * k;
+    this.pitch += (pitch - this.pitch) * k;
+    this.head.rotation.set(this.pitch + headPitch, this.yaw, headRoll);
+
+    // Blinzeln
+    let eyeY = 1;
+    if (t > this.blinkAt) {
+      const bt = t - this.blinkAt;
+      eyeY = bt < 0.13 ? 0.12 : 1;
+      if (bt > 0.13) this.blinkAt = t + 1.8 + Math.random() * 3.5;
+    }
+    for (const e of this.eyes) e.scale.y = eyeY;
+
+    // Mimik
+    for (const br of this.brows) {
+      br.position.y = this.HR * 0.43 + browLift;
+      br.rotation.z = br.userData.sx * browTilt * 0.5;
+    }
+    this.setMouth(mouth);
+  }
+
+  /** Zwei-Knochen-IK: Hand an arm.target (im Körper-Raum), Ellbogen Richtung arm.pole. */
+  solveArm(arm) {
+    const S = arm.sh.position;
+    _d.subVectors(arm.target, S);
+    const L1 = arm.L1;
+    const L2 = arm.L2;
+    const D = clamp(_d.length(), 0.08, (L1 + L2) * 0.999);
+    _d.normalize();
+    const cosA = clamp((L1 * L1 + D * D - L2 * L2) / (2 * L1 * D), -1, 1);
+    const A = Math.acos(cosA);
+    _pp.copy(arm.pole).addScaledVector(_d, -arm.pole.dot(_d));
+    if (_pp.lengthSq() < 1e-6) _pp.set(0, -1, 0).addScaledVector(_d, _d.y);
+    _pp.normalize();
+    _u.copy(_d).multiplyScalar(Math.cos(A)).addScaledVector(_pp, Math.sin(A)); // Oberarm-Richtung
+    _y.copy(_u).negate();
+    _x.crossVectors(_d, _pp).normalize();
+    _z.crossVectors(_x, _y).normalize();
+    _m.makeBasis(_x, _y, _z);
+    arm.sh.quaternion.setFromRotationMatrix(_m);
+    // Unterarm: vom Ellbogen zum (begrenzten) Ziel, im Schulter-Raum ausgedrückt
+    _f.copy(_d).multiplyScalar(D).addScaledVector(_u, -L1).normalize();
+    const fy = _f.dot(_y);
+    const fz = _f.dot(_z);
+    arm.elbow.rotation.set(Math.atan2(-fz, -fy), 0, 0);
+  }
+}
