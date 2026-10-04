@@ -12,6 +12,8 @@ const TYPES = {
   '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
   '.ico': 'image/x-icon',
   '.webmanifest': 'application/manifest+json',
 };
@@ -22,7 +24,9 @@ async function serveStatic(req, res) {
     res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
     return;
   }
-  const rel = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname).replace(/^\/+/, '');
+  const path = decodeURIComponent(url.pathname);
+  // Verzeichnisse liefern ihre index.html (z. B. /3d/ für den 3D-Client)
+  const rel = (path.endsWith('/') ? `${path}index.html` : path).replace(/^\/+/, '');
   const file = normalize(join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR.endsWith(sep) ? PUBLIC_DIR : PUBLIC_DIR + sep)) {
     res.writeHead(403).end();
@@ -35,7 +39,12 @@ async function serveStatic(req, res) {
       'cache-control': 'no-cache',
     });
     res.end(body);
-  } catch {
+  } catch (err) {
+    if (err.code === 'EISDIR') {
+      // /3d → /3d/, damit relative Pfade im Verzeichnis auflösen
+      res.writeHead(301, { location: `${encodeURI(`/${rel}/`)}${url.search}` }).end();
+      return;
+    }
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Nicht gefunden');
   }
 }
