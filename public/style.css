@@ -225,6 +225,19 @@ input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
   z-index: 2;
 }
 .seat.turn { border-color: var(--gold); animation: glow 1.6s ease-in-out infinite; }
+/* Emote eines Spielers aus der 3D-Ansicht */
+.seat-bubble {
+  position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); z-index: 3;
+  background: #fffaf0; color: #22201c; font-weight: 800; font-size: 0.85rem; white-space: nowrap;
+  padding: 4px 10px; border-radius: 12px; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4); pointer-events: none;
+  animation: seat-pop 0.25s ease-out;
+}
+.seat-bubble::after {
+  content: ''; position: absolute; left: 50%; bottom: -5px; width: 10px; height: 10px; background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+@keyframes seat-pop { from { transform: translateX(-50%) scale(0.6); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+.lobby-emote { font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
 @keyframes glow {
   0%, 100% { box-shadow: 0 0 0 3px rgba(233, 196, 106, 0.15), 0 0 18px rgba(233, 196, 106, 0.25); }
   50% { box-shadow: 0 0 0 5px rgba(233, 196, 106, 0.28), 0 0 28px rgba(233, 196, 106, 0.45); }

@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { rng, clamp, envelope, smooth } from './util.js';
 import { backMaterial, cardGeometry } from './cards.js';
+import { mergeStatic } from './merge.js';
 
 // ---------- Material- und Geometrie-Cache ----------
 const mats = new Map();
@@ -85,6 +86,22 @@ export function assignArchetypes(ids, hash) {
 }
 
 const DARK = '#2a1512';
+// Krug je Typ (Holz, Zinn, Ton)
+const MUG = { wizard: '#c9b98a', pirate: '#6b4326', goblin: '#7a5a3a', dwarf: '#8d959e', witch: '#5a4a6a', gentleman: '#d8d2c4', cowboy: '#8a5a32', orc: '#5b4a3b' };
+const MUG_REST = new THREE.Vector3(-0.21, 0.78, 0.66); // auf dem Tisch, rechts vor dem Gast (Stuhl-Koordinaten)
+
+/** Glatter Pfad durch Schlüsselpunkte [[tau, Vector3], …] (tau aufsteigend). */
+function along(tau, keys, out) {
+  if (tau <= keys[0][0]) return out.copy(keys[0][1]);
+  for (let i = 1; i < keys.length; i++) {
+    const [t1, p1] = keys[i];
+    if (tau <= t1) {
+      const [t0, p0] = keys[i - 1];
+      return out.copy(p0).lerp(p1, smooth((tau - t0) / Math.max(t1 - t0, 1e-6)));
+    }
+  }
+  return out.copy(keys.at(-1)[1]);
+}
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _d = new THREE.Vector3();
@@ -95,6 +112,20 @@ const _y = new THREE.Vector3();
 const _z = new THREE.Vector3();
 const _f = new THREE.Vector3();
 const _m = new THREE.Matrix4();
+const _mug = new THREE.Vector3();
+const _hand = new THREE.Vector3();
+const MOUTH = new THREE.Vector3(-0.03, 0.74, 0.2); // Krug am Mund (Körper-Koordinaten)
+const TOAST = new THREE.Vector3(-0.1, 0.98, 0.5); // Krug zum Anstoßen hoch über den Tisch
+
+/** Bierkrug (Boden im Ursprung, Henkel bei +x). */
+export function makeMug(color = '#c9b98a') {
+  const mug = new THREE.Group();
+  part(mug, CYL(8), color, { p: [0, 0.065, 0], s: [0.046, 0.13, 0.046] });
+  part(mug, CYL(8), '#f4ead2', { p: [0, 0.133, 0], s: [0.041, 0.014, 0.041], shadow: false });
+  for (const y of [0.02, 0.11]) part(mug, CYL(8), '#3a2a1a', { p: [0, y, 0], s: [0.048, 0.012, 0.048], shadow: false });
+  part(mug, TORUS(), color, { p: [0.058, 0.068, 0], s: [0.03, 0.036, 0.05] });
+  return mug;
+}
 
 export class Character {
   constructor(archIndex, seed) {
@@ -120,6 +151,8 @@ export class Character {
     this.yaw = 0;
     this.pitch = 0.2;
     this.mood = 'neutral';
+    this.remoteGoal = null; // echter Blick des Spielers (3D-Client), sonst null
+    this.nextDrink = 0;
 
     this.buildChair();
     this.buildBody(A);
@@ -135,6 +168,9 @@ export class Character {
     this.labelAnchor = new THREE.Object3D();
     this.labelAnchor.position.set(0, this.topY + 0.16, 0);
     this.root.add(this.labelAnchor);
+    this.buildMug(MUG[A.key] ?? '#c9b98a');
+    // Unbewegte Teile zusammenfassen (Augenbrauen, Münder und Hände bleiben einzeln)
+    mergeStatic(this.root, new Set([...this.brows, ...Object.values(this.mouth), this.left.hand, this.right.hand]));
     this.root.traverse((o) => (o.userData.character = this));
   }
 
@@ -352,6 +388,18 @@ export class Character {
     this.topY = 0.5 + 0.55 + 0.07 + hatTop; // Weltkoordinate relativ zum Stuhlboden
   }
 
+  buildMug(color) {
+    const mug = (this.mug = makeMug(color));
+    mug.position.copy(MUG_REST);
+    mug.rotation.y = 2.4; // Henkel zeigt zur rechten Hand
+    this.root.add(mug);
+  }
+
+  /** Mittelpunkt des Kopfes in Weltkoordinaten (für Blickkontakt). */
+  headWorld(out = new THREE.Vector3()) {
+    return this.face.getWorldPosition(out);
+  }
+
   buildArm(side) {
     const sh = new THREE.Group();
     sh.position.set(side * this.shoulderW, 0.45, 0);
@@ -401,9 +449,17 @@ export class Character {
     this.turn = on;
   }
 
-  /** Reaktion abspielen: play, bid, win, happy, sad, cheer, trump, wave, shock */
+  /**
+   * Reaktion abspielen: play, bid, win, happy, sad, cheer, trump, wave, shock, drink
+   * sowie die Emotes cheers (Prost), knock (auf den Tisch klopfen), facepalm, laugh.
+   */
   react(type, t, opts = {}) {
-    const dur = { play: 0.8, bid: 1.5, win: 1.6, happy: 1.5, sad: 2.2, cheer: 3.6, trump: 1.6, wave: 1.8, shock: 1.1 }[type] ?? 1;
+    const dur = {
+      play: 0.8, bid: 1.5, win: 1.6, happy: 1.5, sad: 2.2, cheer: 3.6, trump: 1.6, wave: 1.8, shock: 1.1,
+      drink: 2.8, cheers: 3.4, knock: 1.3, facepalm: 1.9, laugh: 2.1,
+    }[type] ?? 1;
+    // Krug-Reaktionen schließen sich gegenseitig aus
+    if (type === 'drink' || type === 'cheers') this.reactions = this.reactions.filter((r) => r.type !== 'drink' && r.type !== 'cheers');
     // gleiche Reaktion nicht stapeln
     this.reactions = this.reactions.filter((r) => r.type !== type);
     this.reactions.push({ type, t0: t + (opts.delay ?? 0), dur, target: opts.target?.clone() });
@@ -423,6 +479,19 @@ export class Character {
     let mouth = 'smile';
     const L = this.left.target.copy(this.base.left);
     const Rh = this.right.target.copy(this.base.right);
+    let mugHeld = 0;
+    let mugTilt = 0;
+    // Ab und zu einen Schluck nehmen (nicht, wenn gerade etwas anderes passiert)
+    if (!this.nextDrink) this.nextDrink = t + 6 + Math.random() * 30;
+    if (t > this.nextDrink) {
+      this.nextDrink = t + 22 + Math.random() * 40;
+      if (!this.turn && !this.reactions.length) this.react('drink', t);
+    }
+    // Krugplatz in Körper-Koordinaten (Ziel für die rechte Hand)
+    this.body.updateWorldMatrix(true, false);
+    const mugBody = this.body.worldToLocal(this.root.localToWorld(_mug.copy(MUG_REST)));
+    mugBody.y += 0.06;
+    mugBody.x += 0.035;
     L.y += 0.008 * Math.sin(t * 1.1 + ph);
     Rh.y += 0.01 * Math.sin(t * 1.3 + ph + 1);
 
@@ -508,6 +577,59 @@ export class Character {
           Rh.lerp(_v.set(-0.3 + Math.sin(tau * 22) * 0.07, 0.92, 0.18), e);
           mouth = 'smile';
           break;
+        case 'drink':
+        case 'cheers': {
+          // Hand → Krug → (hoch zum Anstoßen →) Mund, trinken, zurückstellen
+          const keys = rx.type === 'drink'
+            ? [[0, this.base.right], [0.18, mugBody], [0.34, MOUTH], [0.64, MOUTH], [0.8, mugBody], [1, this.base.right]]
+            : [[0, this.base.right], [0.12, mugBody], [0.28, TOAST], [0.46, TOAST], [0.6, MOUTH], [0.78, MOUTH], [0.9, mugBody], [1, this.base.right]];
+          const [grab, drinkFrom, drinkTo, release] = rx.type === 'drink' ? [0.18, 0.34, 0.64, 0.8] : [0.12, 0.6, 0.78, 0.9];
+          along(tau, keys, Rh);
+          if (rx.type === 'cheers' && tau > 0.28 && tau < 0.46) Rh.y += Math.sin((tau - 0.28) * Math.PI * 11) * 0.03;
+          if (tau >= grab && tau <= release) mugHeld = Math.max(mugHeld, 1);
+          if (tau > drinkFrom && tau < drinkTo) {
+            const d = envelope((tau - drinkFrom) / (drinkTo - drinkFrom), 0.3);
+            mugTilt = 1.1 * d;
+            headPitch -= 0.32 * d;
+            mouth = 'open';
+          } else if (rx.type === 'cheers' && tau > 0.2 && tau < 0.5) {
+            mouth = 'open';
+            browLift += 0.02;
+            headPitch -= 0.12;
+          }
+          lean += 0.05 * e;
+          break;
+        }
+        case 'knock': {
+          // drei Schläge mit der Faust auf den Tisch (bei 0,35 / 0,55 / 0,75 s)
+          const s = tau * rx.dur;
+          const lift = 0.17 * (s < 0.25 || s > 0.85 ? 1 : Math.abs(Math.cos(((s - 0.25) / 0.2) * Math.PI)));
+          // Ziel über der Tischplatte (Stuhl-Koordinaten) → Körper-Koordinaten (der Körper ist vorgebeugt)
+          this.body.worldToLocal(this.root.localToWorld(_v.set(-0.12, MUG_REST.y + 0.045 + lift, 0.6)));
+          Rh.lerp(_v, e);
+          lean += 0.14 * e;
+          headPitch += 0.12 * e;
+          browTilt += 0.35 * e;
+          mouth = 'neutral';
+          break;
+        }
+        case 'facepalm':
+          Rh.lerp(_v.set(-0.02, 0.79, 0.2), e);
+          headPitch += 0.3 * e;
+          headRoll += 0.07 * Math.sin(tau * Math.PI * 5) * e;
+          browTilt -= 0.4 * e;
+          mouth = 'frown';
+          lean += 0.08 * e;
+          break;
+        case 'laugh':
+          headPitch -= 0.28 * e;
+          bodyY += 0.012 * e * Math.sin(tau * Math.PI * 16);
+          lean -= 0.08 * e;
+          L.lerp(_v.set(0.08, 0.2, 0.25), e * 0.6);
+          Rh.lerp(_v.set(-0.08, 0.22, 0.26), e);
+          mouth = 'open';
+          browLift += 0.02 * e;
+          break;
       }
     }
     this.reactions = this.reactions.filter((r) => t - r.t0 < r.dur);
@@ -522,21 +644,36 @@ export class Character {
     this.solveArm(this.left);
     this.solveArm(this.right);
 
+    // Krug: auf dem Tisch oder in der rechten Hand
+    if (mugHeld) {
+      this.right.hand.updateWorldMatrix(true, false);
+      this.root.worldToLocal(this.right.hand.getWorldPosition(_hand));
+      this.mug.position.set(_hand.x - 0.035, _hand.y - 0.065, _hand.z);
+      this.mug.rotation.set(-mugTilt, 2.4, 0);
+    } else {
+      this.mug.position.copy(MUG_REST);
+      this.mug.rotation.set(0, 2.4, 0);
+    }
+
     // Kartenfächer bleibt in der linken Hand (die nur beim großen Jubel mit hochgeht)
     this.fan.position.set(L.x - 0.03, L.y + 0.02, L.z + 0.03);
     this.fan.rotation.set(-0.35, 0, 0.1);
     this.fan.visible = this.count > 0;
 
-    // Blick
-    if (t > this.glanceAt) {
-      const r = Math.random();
-      if (r < 0.55) this.lookGoal.copy(this.focus);
-      else if (r < 0.8) this.lookGoal.copy(this.camPos);
-      else this.lookGoal.set((Math.random() - 0.5) * 4, 0.8 + Math.random() * 1.2, (Math.random() - 0.5) * 4);
-      this.glanceAt = t + 1.4 + Math.random() * 2.8;
+    // Blick: echter Blick des Spielers (3D-Client) oder umherschauen
+    if (this.remoteGoal) {
+      this.lookGoal.copy(this.remoteGoal);
+    } else {
+      if (t > this.glanceAt) {
+        const r = Math.random();
+        if (r < 0.55) this.lookGoal.copy(this.focus);
+        else if (r < 0.8) this.lookGoal.copy(this.camPos);
+        else this.lookGoal.set((Math.random() - 0.5) * 4, 0.8 + Math.random() * 1.2, (Math.random() - 0.5) * 4);
+        this.glanceAt = t + 1.4 + Math.random() * 2.8;
+      }
+      if (this.turn) this.lookGoal.copy(this.fanWorld(_v));
     }
-    if (this.turn) this.lookGoal.copy(this.fanWorld(_v));
-    const k = 1 - Math.exp(-dt * 5);
+    const k = 1 - Math.exp(-dt * (this.remoteGoal ? 7 : 5));
     this.look.lerp(this.lookGoal, k);
     this.neck.updateWorldMatrix(true, false);
     this.neck.worldToLocal(_v.copy(this.look));

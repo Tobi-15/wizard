@@ -62,6 +62,21 @@ let wantedRoom = new URLSearchParams(location.search).get('room')?.toUpperCase()
 let reconnectDelay = 500;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+// Filmkorn: kleines Rauschbild einmal erzeugen
+{
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(256, 256);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = Math.random() * 255;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  document.documentElement.style.setProperty('--grain', `url(${c.toDataURL('image/png')})`);
+}
+
 // ---------- 3D ----------
 let world;
 try {
@@ -73,8 +88,12 @@ try {
   throw err;
 }
 setAnisotropy(world.renderer.capabilities.getMaxAnisotropy());
+// Wird es zu langsam, fällt zuerst das Filmkorn weg (bevor die Auflösung sinkt)
+world.cheapSteps.push(() => $('grain').remove());
 
 const table = new TableView(world, {
+  // Wer weniger Bewegung möchte, startet in der ruhigen Übersicht (Kopf folgt dort nicht der Maus)
+  view: store.get('wizard.view3d') ?? (reduceMotion ? 'overview' : 'ego'),
   sortHand,
   reduceMotion,
   sound: (name) => play(name),
@@ -116,6 +135,10 @@ function connect() {
       if (!state && /Raum|Spiel läuft schon|voll/.test(msg.message)) leaveLocal(false);
     } else if (msg.type === 'left') {
       leaveLocal(true);
+    } else if (msg.type === 'look') {
+      table.remoteLook(msg.id, msg);
+    } else if (msg.type === 'emote') {
+      receiveEmote(msg.id, msg.kind);
     }
   });
   ws.addEventListener('close', () => {
@@ -162,6 +185,7 @@ let soundOn = store.get('wizard.sound') !== 'off';
 function unlockAudio() {
   if (audio || !soundOn) return;
   try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch { audio = null; }
+  startAmbience();
 }
 addEventListener('pointerdown', unlockAudio, { passive: true });
 addEventListener('keydown', unlockAudio);
@@ -178,13 +202,72 @@ function tone(freq, start, dur, type = 'sine', vol = 0.12) {
   osc.start(t0);
   osc.stop(t0 + dur + 0.02);
 }
+// Kurzes gefiltertes Rauschen (Klopfen, Klatschen)
+function noise(start, dur, { freq = 800, q = 1, vol = 0.2, type = 'lowpass' } = {}) {
+  const len = Math.ceil(audio.sampleRate * dur);
+  const buf = audio.createBuffer(1, len, audio.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 2;
+  const src = audio.createBufferSource();
+  src.buffer = buf;
+  const f = audio.createBiquadFilter();
+  f.type = type;
+  f.frequency.value = freq;
+  f.Q.value = q;
+  const g = audio.createGain();
+  g.gain.value = vol;
+  src.connect(f).connect(g).connect(audio.destination);
+  src.start(audio.currentTime + start);
+}
 const SOUNDS = {
+  // Emotes (Zeitpunkte passend zu den Animationen in characters.js)
+  knock: () => { for (const t of [0.35, 0.55, 0.75]) { noise(t, 0.14, { freq: 220, vol: 0.9 }); tone(85, t, 0.14, 'sine', 0.3); } },
+  cheers: () => { tone(2637, 0.9, 0.6, 'sine', 0.07); tone(3520, 0.905, 0.45, 'sine', 0.05); tone(1976, 0.9, 0.3, 'triangle', 0.03); },
+  facepalm: () => { noise(0.42, 0.09, { freq: 1700, type: 'bandpass', q: 0.8, vol: 0.6 }); },
+  laugh: () => { for (let i = 0; i < 5; i++) tone(330 - i * 18, 0.12 + i * 0.15, 0.09, 'triangle', 0.05); },
+  cheer: () => { tone(523, 0, 0.12, 'triangle', 0.08); tone(659, 0.1, 0.12, 'triangle', 0.08); tone(784, 0.2, 0.3, 'triangle', 0.09); },
+  wave: () => {},
   card: () => { tone(220, 0, 0.07, 'triangle', 0.16); tone(140, 0.005, 0.06, 'sine', 0.1); },
   deal: () => { tone(320 + Math.random() * 60, 0, 0.035, 'triangle', 0.05); },
   turn: () => { tone(660, 0, 0.16); tone(880, 0.12, 0.22); },
   win: () => { tone(784, 0, 0.14); tone(988, 0.09, 0.14); tone(1319, 0.18, 0.3); },
   fanfare: () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, i * 0.12, 0.35, 'triangle', 0.14)); },
 };
+// Kneipen-Geräusche: leises Raumrauschen und Kaminknistern (nur bei eingeschaltetem Ton)
+let ambience = null;
+function startAmbience() {
+  if (ambience || !audio || !soundOn) return;
+  const len = audio.sampleRate * 4;
+  const buf = audio.createBuffer(1, len, audio.sampleRate);
+  const d = buf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < len; i++) {
+    last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; // braunes Rauschen
+    d[i] = last * 3.5;
+  }
+  const src = audio.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  const lp = audio.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 380;
+  const g = audio.createGain();
+  g.gain.value = 0.03;
+  src.connect(lp).connect(g).connect(audio.destination);
+  src.start();
+  const timer = setInterval(() => {
+    if (document.hidden || Math.random() > 0.45) return;
+    noise(Math.random() * 0.12, 0.004 + Math.random() * 0.012, { freq: 1500 + Math.random() * 3000, type: 'bandpass', q: 1.2, vol: 0.02 + Math.random() * 0.05 });
+  }, 140);
+  ambience = { src, timer };
+}
+function stopAmbience() {
+  if (!ambience) return;
+  ambience.src.stop();
+  clearInterval(ambience.timer);
+  ambience = null;
+}
+
 function play(name) {
   if (!soundOn || !audio) return;
   if (audio.state === 'suspended') audio.resume();
@@ -264,6 +347,7 @@ function show(screen) {
   $('screen-lobby').hidden = screen !== 'lobby';
   $('hud').hidden = screen !== 'game';
   document.body.dataset.screen = screen;
+  document.body.dataset.view = screen === 'game' ? table.view : '';
   updateInset();
 }
 
@@ -373,6 +457,7 @@ function renderGame() {
     ].filter(Boolean),
   );
   $('btn-last').disabled = !g.lastTrick;
+  renderViewButton();
 
   const status = $('g-status');
   status.className = `status${myTurn ? ' mine' : ''}`;
@@ -395,6 +480,19 @@ function renderGame() {
 
   if ($('dlg-scores').open) renderScores();
   if ($('dlg-last').open) renderLastTrick();
+}
+
+function renderViewButton() {
+  const ego = table.view === 'ego';
+  $('btn-view').textContent = ego ? 'Übersicht' : 'Am Tisch';
+  $('btn-view').title = ego ? 'Von oben auf den ganzen Tisch schauen (Taste V)' : 'Zurück auf deinen Platz (Taste V)';
+}
+
+function toggleView() {
+  table.setView(table.view === 'ego' ? 'overview' : 'ego');
+  store.set('wizard.view3d', table.view);
+  if (document.body.dataset.screen === 'game') document.body.dataset.view = table.view;
+  renderViewButton();
 }
 
 function statusText(g) {
@@ -493,6 +591,85 @@ function actionEls(g, isHost) {
   return [];
 }
 
+// ---------- Emotes ----------
+const EMOTES = [
+  { kind: 'wave', icon: '👋', label: 'Winken', text: '👋 Hallo!' },
+  { kind: 'cheers', icon: '🍺', label: 'Prost', text: '🍺 Prost!' },
+  { kind: 'knock', icon: '✊', label: 'Klopfen', text: '✊ Klopf, klopf!' },
+  { kind: 'cheer', icon: '🎉', label: 'Jubeln', text: '🎉 Jaaa!' },
+  { kind: 'laugh', icon: '😂', label: 'Lachen', text: '😂 Hahaha!' },
+  { kind: 'facepalm', icon: '🤦', label: 'Facepalm', text: '🤦 Oh nein …' },
+];
+const emoteByKind = Object.fromEntries(EMOTES.map((e) => [e.kind, e]));
+let lastEmote = 0;
+
+function emoteButtons(onPick) {
+  return EMOTES.map((e, i) =>
+    h('button', { class: 'emote-btn', title: `${e.label} (Taste ${i + 1})`, 'aria-label': e.label, onclick: () => onPick(e.kind) },
+      h('span', { class: 'emoji' }, e.icon), h('span', { class: 'lbl' }, e.label), h('kbd', {}, i + 1)));
+}
+$('emote-menu').replaceChildren(...emoteButtons((kind) => { sendEmote(kind); toggleEmoteMenu(false); }));
+$('lobby-emotes').replaceChildren(...emoteButtons(sendEmote));
+
+function toggleEmoteMenu(open = $('emote-menu').hidden) {
+  $('emote-menu').hidden = !open;
+  $('btn-emote').setAttribute('aria-expanded', String(open));
+}
+
+function sendEmote(kind) {
+  if (!state || !emoteByKind[kind]) return;
+  const t = performance.now();
+  if (t - lastEmote < 1000) return;
+  lastEmote = t;
+  send({ type: 'emote', kind });
+  // Mich selbst sehe ich nicht – also Sprechblase, Ton und ein kleiner Effekt aus meiner Sicht
+  myBubble(emoteByKind[kind].text);
+  play(kind);
+  table.selfEmote(kind);
+}
+
+function receiveEmote(id, kind) {
+  const e = emoteByKind[kind];
+  if (!e || !state) return;
+  if (!table.remoteEmote(id, kind)) return;
+  play(kind);
+  const seats = state.game ? state.game.seats : state.room.players;
+  const seat = seats.findIndex((p) => p.id === id);
+  if (seat >= 0) showBubble(seat, e.text);
+}
+
+let myBubbleTimer;
+function myBubble(text) {
+  const el = $('my-bubble');
+  el.textContent = text;
+  el.hidden = false;
+  el.classList.remove('pop');
+  void el.offsetWidth; // Animation neu starten
+  el.classList.add('pop');
+  clearTimeout(myBubbleTimer);
+  myBubbleTimer = setTimeout(() => (el.hidden = true), 2400);
+}
+
+// Blick an die anderen schicken (nur in der Ego-Perspektive, gedrosselt)
+const gazeSent = { yaw: 0, pitch: 0, at: null, t: 0, active: false };
+function sendGaze(nowMs) {
+  if (!state || !ws || ws.readyState !== WebSocket.OPEN) return;
+  const gz = table.myGaze();
+  if (!gz) {
+    if (gazeSent.active) {
+      gazeSent.active = false;
+      send({ type: 'look', yaw: null });
+    }
+    return;
+  }
+  const changed = !gazeSent.active || gz.at !== gazeSent.at || Math.abs(gz.yaw - gazeSent.yaw) > 0.035 || Math.abs(gz.pitch - gazeSent.pitch) > 0.035;
+  const since = nowMs - gazeSent.t;
+  if ((changed && since > 120) || since > 2500) {
+    Object.assign(gazeSent, gz, { t: nowMs, active: true });
+    send({ type: 'look', yaw: +gz.yaw.toFixed(3), pitch: +gz.pitch.toFixed(3), at: gz.at });
+  }
+}
+
 // ---------- Namensschilder über den Köpfen ----------
 const plates = new Map(); // seat -> element
 const bubbles = new Map(); // seat -> { text, until }
@@ -574,6 +751,9 @@ function positionPlates() {
       continue;
     }
     el.style.visibility = '';
+    // Sitznachbarn außerhalb des Bildes (Ego-Perspektive): Schild am Rand mit Pfeil
+    const edge = p.off < 0 ? 'l' : p.off > 0 ? 'r' : '';
+    if (el.dataset.edge !== edge) el.dataset.edge = edge;
     // Größe nur nach Inhaltsänderung messen (sonst Layout in jedem Frame)
     el._size ??= [el.offsetWidth || 120, el.offsetHeight || 50];
     const [w, hgt] = el._size;
@@ -581,7 +761,7 @@ function positionPlates() {
       el,
       w,
       h: hgt,
-      x: Math.min(Math.max(p.x, w / 2 + 8), innerWidth - w / 2 - 8),
+      x: Math.min(Math.max(p.x, w / 2 + (edge ? 24 : 8)), innerWidth - w / 2 - (edge ? 24 : 8)),
       y: Math.max(p.y, 58 + hgt + 8), // y = Unterkante; nicht unter die Kopfzeile
     });
   }
@@ -691,11 +871,17 @@ $('btn-sound').addEventListener('click', () => {
   store.set('wizard.sound', soundOn ? null : 'off');
   if (soundOn) {
     unlockAudio();
+    startAmbience();
     play('turn');
-  }
+  } else stopAmbience();
   renderSoundButton();
 });
 $('btn-scores').addEventListener('click', openScores);
+$('btn-view').addEventListener('click', toggleView);
+$('btn-emote').addEventListener('click', () => toggleEmoteMenu());
+addEventListener('pointerdown', (e) => {
+  if (!$('emote-menu').hidden && !e.target.closest('#emote-menu, #btn-emote')) toggleEmoteMenu(false);
+});
 $('btn-last').addEventListener('click', () => {
   renderLastTrick();
   $('dlg-last').showModal();
@@ -729,10 +915,29 @@ stage.addEventListener('pointerup', (e) => {
 stage.addEventListener('pointerleave', () => {
   table.hovered = null;
 });
-// Tastatur: ←/→ wählt eine Karte, Enter spielt sie
+// Ego-Perspektive: der Kopf folgt der Maus (auch über den HUD-Elementen)
+addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'touch' || document.querySelector('dialog[open]')) return;
+  table.setPointer((e.clientX / innerWidth) * 2 - 1, (e.clientY / innerHeight) * 2 - 1);
+}, { passive: true });
+document.documentElement.addEventListener('mouseleave', () => table.setPointer(0, 0));
+addEventListener('blur', () => table.setPointer(0, 0));
+
+// Tastatur: ←/→ wählt eine Karte, Enter spielt sie, V wechselt die Ansicht, 1–6 Emotes
 addEventListener('keydown', (e) => {
-  const g = state?.game;
-  if (!g || document.querySelector('dialog[open]') || e.target.closest?.('input, button')) return;
+  if (!state || document.querySelector('dialog[open]') || e.target.closest?.('input')) return;
+  if (e.key >= '1' && e.key <= '6' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    sendEmote(EMOTES[Number(e.key) - 1].kind);
+    return;
+  }
+  if (e.key === 'Escape') toggleEmoteMenu(false);
+  const g = state.game;
+  if (!g) return;
+  if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    toggleView();
+    return;
+  }
+  if (e.target.closest?.('button')) return;
   const ids = sortHand(g.hand, g.trump).map((c) => c.id);
   if (!ids.length) return;
   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -764,13 +969,15 @@ addEventListener('resize', () => {
 // ---------- Renderloop ----------
 let lastT = 0;
 let frames = 0;
+const timeScale = Number(new URLSearchParams(location.search).get('slow')) || 1; // ?slow=0.25 für Tests: Zeitlupe
 function frame(ms) {
-  const t = ms / 1000;
+  const t = (ms / 1000) * timeScale;
   const dt = Math.min(0.1, lastT ? t - lastT : 0.016);
   lastT = t;
   updateTweens(t);
   world.animateEnv(t);
   table.update(t, dt);
+  sendGaze(ms);
   positionPlates();
   world.renderer.render(world.scene, world.camera);
   world.adaptQuality(t);
@@ -795,6 +1002,7 @@ window.wizard3d = {
   world,
   state: () => state,
   handPoints: () => table.handScreenPoints(),
+  headPoint: (id) => table.headScreenPoint(id),
 };
 
 table.showStart();

@@ -29,7 +29,10 @@ export function seatPos(a, out) {
 /** Wo die Karte eines Spielers im Stich liegt. */
 export function trickSpot(a, n, out = new THREE.Vector3()) {
   const k = n >= 5 ? 1.1 : 1;
-  return onEllipse(a, 0.5 * k, 0.34 * k, TABLE.y + 0.004, out);
+  onEllipse(a, 0.5 * k, 0.34 * k, TABLE.y + 0.004, out);
+  // die eigene Karte etwas weiter zur Mitte, damit sie in der Ego-Perspektive nicht unter Status und Hand liegt
+  if (a === 0) out.z *= 0.7;
+  return out;
 }
 
 /** Stapel der gewonnenen Stiche: an der Tischkante, vom Spieler aus rechts. */

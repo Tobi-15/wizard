@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { flat } from './characters.js';
 import { TABLE } from './layout.js';
 import { rng, clamp } from './util.js';
+import { mergeStatic } from './merge.js';
 
 const R = rng(1234);
 
@@ -98,7 +99,7 @@ export function createWorld(container) {
   scene.add(hemi);
 
   const lampY = 2.55;
-  const spot = new THREE.SpotLight('#ffc27a', 26, 0, 0.82, 0.55, 2);
+  const spot = new THREE.SpotLight('#ffc27a', 26, 0, 0.98, 0.62, 2);
   spot.position.set(0, lampY - 0.05, 0);
   spot.target.position.set(0, TABLE.y, 0);
   spot.castShadow = true;
@@ -329,14 +330,14 @@ export function createWorld(container) {
     bar.add(shelf);
     for (let i = 0; i < 13; i++) {
       const c = bottleColors[Math.floor(R() * bottleColors.length)];
-      const m = new THREE.MeshLambertMaterial({ color: c, emissive: c, emissiveIntensity: 0.35, flatShading: true });
+      const m = flat(c, { emissive: c, emissiveIntensity: 0.35 });
       const h = 0.22 + R() * 0.12;
       const bt = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, h, 6), m);
       bt.position.set(-1.45 + i * 0.24 + R() * 0.05, sy + h / 2 + 0.025, -0.75);
       const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.03, 0.1, 5), m);
-      neck.position.y = h / 2 + 0.05;
-      bt.add(neck);
-      bar.add(bt);
+      neck.position.copy(bt.position);
+      neck.position.y += h / 2 + 0.05;
+      bar.add(bt, neck);
     }
   }
   for (let i = 0; i < 3; i++) {
@@ -430,6 +431,9 @@ export function createWorld(container) {
   canvasM.position.z = 0.03;
   pic.add(frame, canvasM);
   room.add(pic);
+
+  // Raum ist unbewegt: gleiche Materialien zusammenfassen (Flammen bleiben einzeln)
+  mergeStatic(room, new Set([...flames, ...sconces]));
 
   // ---------- Tisch ----------
   const tableG = new THREE.Group();
@@ -571,6 +575,33 @@ export function createWorld(container) {
     smokes.push(s);
   }
 
+  // Lichthöfe um Flammen und Lampe (additive Sprites statt teurer Nachbearbeitung)
+  const haloTex = canvasTex(128, 128, (ctx, w) => {
+    const g = ctx.createRadialGradient(w / 2, w / 2, 0, w / 2, w / 2, w / 2);
+    g.addColorStop(0, 'rgba(255,255,255,0.9)');
+    g.addColorStop(0.18, 'rgba(255,255,255,0.35)');
+    g.addColorStop(0.5, 'rgba(255,255,255,0.08)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, w);
+  });
+  const halos = [];
+  function halo(parent, pos, size, color, strength = 1) {
+    const m = new THREE.SpriteMaterial({ map: haloTex, color, transparent: true, opacity: strength, blending: THREE.AdditiveBlending, depthWrite: false });
+    const sp = new THREE.Sprite(m);
+    sp.position.copy(pos);
+    sp.scale.setScalar(size);
+    sp.renderOrder = 7;
+    sp.userData = { size, strength, ph: R() * 10 };
+    parent.add(sp);
+    halos.push(sp);
+    return sp;
+  }
+  for (const f of sconces) halo(f.parent, f.position, 0.42, '#ffb35a', 0.7);
+  halo(candleG, candleFlame.position, 0.3, '#ffb35a', 0.75);
+  halo(lamp, bulb.position, 1.1, '#ffcf8a', 0.55);
+  halo(fire, new THREE.Vector3(0, 0.4, 0.25), 1.9, '#ff7a26', 0.5);
+
   // ---------- Animation der Umgebung ----------
   function animateEnv(t) {
     const fl = 0.85 + Math.sin(t * 11) * 0.06 + Math.sin(t * 17.3) * 0.05 + Math.sin(t * 5.1) * 0.06;
@@ -597,6 +628,12 @@ export function createWorld(container) {
     }
     dustGeo.attributes.position.needsUpdate = true;
 
+    for (const h of halos) {
+      const u = h.userData;
+      const k = 0.88 + Math.sin(t * 9.7 + u.ph) * 0.06 + Math.sin(t * 15.3 + u.ph * 2) * 0.05;
+      h.scale.setScalar(u.size * k);
+      h.material.opacity = u.strength * k;
+    }
     for (const s of smokes) {
       const u = s.userData;
       const a = u.a + t * u.sp;
@@ -614,12 +651,14 @@ export function createWorld(container) {
   addEventListener('resize', resize);
 
   // Bildrate halten: Liegt die Bildrate zweimal hintereinander (je 2 s) unter 40 FPS,
-  // wird nur die Pixelratio in kleinen Schritten gesenkt (nie unter 1). Schatten und
-  // Effekte bleiben. ?hq schaltet das ab.
+  // werden zuerst billige Extras abgeschaltet (cheapSteps, z. B. Filmkorn), danach wird die
+  // Pixelratio in kleinen Schritten gesenkt (nie unter 1). Schatten und Lichteffekte
+  // bleiben. ?hq schaltet das ab.
   const fixed = new URLSearchParams(location.search).has('hq');
   const perf = { dpr: maxDpr, t0: 0, frames: 0, low: 0, start: 0 };
+  const cheapSteps = [];
   function adaptQuality(t) {
-    if (fixed || document.hidden || perf.dpr <= 1) return;
+    if (fixed || document.hidden || (perf.dpr <= 1 && !cheapSteps.length)) return;
     if (!perf.start) perf.start = t;
     if (t - perf.start < 4) return; // Shader-Kompilierung am Anfang ignorieren
     if (!perf.t0 || t - perf.t0 > 5) {
@@ -636,11 +675,15 @@ export function createWorld(container) {
     perf.low = fps < 40 ? perf.low + 1 : 0;
     if (perf.low >= 2) {
       perf.low = 0;
+      if (cheapSteps.length) {
+        cheapSteps.shift()();
+        return;
+      }
       perf.dpr = Math.max(1, perf.dpr - 0.25);
       renderer.setPixelRatio(perf.dpr);
       renderer.setSize(innerWidth, innerHeight);
     }
   }
 
-  return { renderer, scene, camera, animateEnv, adaptQuality, perf, spot, lampY };
+  return { renderer, scene, camera, animateEnv, adaptQuality, cheapSteps, perf, spot, lampY };
 }

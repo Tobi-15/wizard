@@ -4,6 +4,8 @@ Das Stichspiel Wizard für 3–6 Spieler im Browser. Spielen geht ohne Account: 
 
 Unter `/3d` gibt es dieselbe Partie als 3D-Kneipe mit Low-Poly-Figuren (für Desktop). Beide Ansichten spielen im selben Raum zusammen, man kann jederzeit wechseln.
 
+In der Kneipe sitzt man in der **Ego-Perspektive** am Tisch: Der Kopf folgt der Maus, und die anderen sehen, wohin man schaut. Mit **V** wechselt man in die Übersicht von oben. Mit den Tasten **1–6** (oder dem Krug-Knopf) gibt es Emotes: Winken, Prost, auf den Tisch klopfen, Jubeln, Lachen, Facepalm. Spieler in der 2D-Ansicht sehen die Emotes als Sprechblase.
+
 ## Hausregel
 
 Wird eine **Fehlfarbe** ausgespielt, darf man **immer Trumpf** legen, auch wenn man die ausgespielte Farbe auf der Hand hat. Wird **Trumpf** ausgespielt, muss man Trumpf bedienen. Zauberer und Narren dürfen wie immer jederzeit gespielt werden.
@@ -63,7 +65,7 @@ node scripts/bots.js 6 --even  # … mit „Ansagen dürfen nicht aufgehen“
 | Datei | Inhalt |
 |---|---|
 | `server/game.js` | Spielregeln als reine Logik (Bedienregel, Stichgewinner, Wertung, Phasen) |
-| `server/rooms.js` | Räume, Beitreten, Reconnect, Sicht pro Spieler (fremde Karten bleiben auf dem Server) |
+| `server/rooms.js` | Räume, Beitreten, Reconnect, Sicht pro Spieler (fremde Karten bleiben auf dem Server), Weiterreichen von Blick und Emotes der 3D-Ansicht |
 | `server/server.js` | HTTP für die statischen Dateien und WebSocket unter `/ws` |
 | `server/index.js` | Startpunkt für `npm start` |
 | `public/` | Oberfläche (Vanilla JS, kein Build-Schritt) |

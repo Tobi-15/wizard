@@ -7,6 +7,11 @@ import { Game, GameError, MAX_PLAYERS, MIN_PLAYERS } from './game.js';
 const ROOM_TTL_MS = 30 * 60 * 1000;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // ohne I und O
 const MAX_NAME = 20;
+// Nur Darstellung (3D-Client): Blickrichtung und Emotes werden an die anderen weitergereicht,
+// ohne den Spielzustand zu berühren.
+export const EMOTES = ['wave', 'cheers', 'knock', 'cheer', 'facepalm', 'laugh'];
+const LOOK_MIN_MS = 80; // höchstens ~12 Blick-Updates pro Sekunde und Verbindung
+const EMOTE_MIN_MS = 1000; // höchstens ein Emote pro Sekunde und Spieler
 
 function makeCode(existing) {
   for (;;) {
@@ -49,6 +54,10 @@ export class Rooms {
       switch (msg.type) {
         case 'leave':
           return this.leave(conn, room, player);
+        case 'look':
+          return this.relayLook(conn, room, player, msg);
+        case 'emote':
+          return this.relayEmote(room, player, msg);
         case 'setOption':
           this.setOption(room, player, msg);
           break;
@@ -197,6 +206,39 @@ export class Rooms {
       room.game?.collectTrick();
       this.broadcast(room);
     }, this.trickDelayMs);
+  }
+
+  /** Blickrichtung (relativ zum eigenen Platz) an die anderen weiterreichen. yaw = null gibt den Blick frei. */
+  relayLook(conn, room, player, { yaw, pitch, at }) {
+    const t = Date.now();
+    if (t - (conn.lookSent ?? 0) < LOOK_MIN_MS) return;
+    let look = { yaw: null };
+    if (yaw !== null) {
+      if (!Number.isFinite(yaw) || !Number.isFinite(pitch)) return;
+      look = {
+        yaw: Math.round(Math.max(-1.6, Math.min(1.6, yaw)) * 1000) / 1000,
+        pitch: Math.round(Math.max(-1.2, Math.min(1.2, pitch)) * 1000) / 1000,
+        at: room.players.some((p) => p.id === at && p !== player) ? at : null,
+      };
+    }
+    conn.lookSent = t;
+    this.relay(room, player, { type: 'look', id: player.id, ...look });
+  }
+
+  relayEmote(room, player, { kind }) {
+    if (!EMOTES.includes(kind)) throw new GameError('Unbekanntes Emote.');
+    const t = Date.now();
+    if (t - (player.emoteSent ?? 0) < EMOTE_MIN_MS) return;
+    player.emoteSent = t;
+    this.relay(room, player, { type: 'emote', id: player.id, kind });
+  }
+
+  /** Nachricht an alle anderen Spieler im Raum (nicht an den Absender). */
+  relay(room, from, msg) {
+    for (const p of room.players) {
+      if (p === from) continue;
+      for (const c of p.conns) c.send(msg);
+    }
   }
 
   broadcast(room) {

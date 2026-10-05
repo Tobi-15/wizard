@@ -3,22 +3,44 @@
 
 import * as THREE from 'three';
 import { makeCard, setCardFace, CARD_ASPECT, backMesh, handTint } from './cards.js';
-import { Character, assignArchetypes, flat } from './characters.js';
+import { Character, assignArchetypes, flat, makeMug } from './characters.js';
 import { TABLE, seatAngle, seatPos, trickSpot, pileSpot, ringSpot, deckSpot, tangent } from './layout.js';
-import { tween, after, cancel, cancelGroup, now, hashStr, clamp, easeOut, easeInOut } from './util.js';
+import { tween, after, cancel, cancelGroup, now, hashStr, clamp, smooth, easeOut, easeInOut } from './util.js';
 
 const TRICK_H = 0.4; // Höhe einer Karte im Stich (Meter)
-const PILE_H = 0.24; // Höhe einer Karte im Stichstapel
+const PILE_H = 0.3; // Höhe einer Karte im Stichstapel
 const DECK_H = 0.24;
 const FAN_H = 0.17;
+
+// Kamera: Übersicht (von hinten oben, alle im Bild) oder Ego-Perspektive vom eigenen Platz
+const OVERVIEW_FOV = 40;
+const EGO = {
+  fov: 56,
+  eye: new THREE.Vector3(0, 1.36, TABLE.rz + 0.4),
+  pitch: -0.2, // Grundneigung: Blick leicht nach unten auf den Tisch
+  maxYaw: 0.85, // so weit dreht sich der Kopf, wenn die Maus am Bildrand ist
+  maxPitch: 0.15,
+};
 
 const WHITE = new THREE.Color(1, 1, 1);
 const DIM = new THREE.Color(0.14, 0.13, 0.12); // linear → wirkt etwa 40 % hell
 
 const _v = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _ndc = new THREE.Vector2();
+const _fx = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
 const Y = new THREE.Vector3(0, 1, 0);
+
+/** 0 → 1 → 0 über die Zeit s (Sekunden): weich hoch bis `rise`, weich wieder runter bis `end`. */
+function envelopeT(s, rise, end) {
+  if (s <= 0 || s >= end) return 0;
+  if (s < rise) return smooth(s / rise);
+  const fall = Math.min(0.35, end * 0.3);
+  if (s > end - fall) return smooth((end - s) / fall);
+  return 1;
+}
 
 function quatFlat(faceUp, rotY, spin = 0) {
   // Karte flach hinlegen: Vorderseite nach oben (faceUp) oder unten, Oberkante zeigt nach -z,
@@ -63,7 +85,7 @@ export class TableView {
     this.hovered = null;
     this.pressed = null;
     this.pending = null;
-    this.handLayout = { upp: 0.001, ch: 150 };
+    this.handLayout = { ch: 150 };
     this.cheerAt = 0;
 
     this.handGroup = new THREE.Group();
@@ -76,6 +98,7 @@ export class TableView {
 
     // Kamera
     this.mode = 'orbit';
+    this.view = hooks.view === 'overview' ? 'overview' : 'ego'; // im Spiel: Ego-Perspektive oder Übersicht
     this.camPos = this.camera.position.clone();
     this.camLook = new THREE.Vector3(0, 1, 0);
     this.fit = { pos: new THREE.Vector3(0, 2.4, 4.5), look: new THREE.Vector3(0, 0.95, -0.1) };
@@ -83,6 +106,12 @@ export class TableView {
     this.scratchCam = new THREE.PerspectiveCamera();
     this.inset = 0; // linker Bildbereich, der von einem Panel verdeckt ist (px)
     this.insetCur = 0;
+    this.egoBlend = 0; // 0 = Übersicht, 1 = Ego-Perspektive (weicher Übergang)
+    this.pointer = { x: 0, y: 0 }; // Mausposition, -1 … 1 (y nach unten)
+    this.headYaw = 0;
+    this.headPitch = EGO.pitch;
+    this.egoPos = new THREE.Vector3();
+    this.egoLook = new THREE.Vector3();
 
     // Leuchtring für den Spieler am Zug
     this.ring = new THREE.Mesh(
@@ -131,6 +160,8 @@ export class TableView {
     this.mySeat = myIndex;
     const arch = assignArchetypes(players.map((p) => p.id), hashStr);
     const keep = new Set();
+    this.charById = new Map();
+    this.myId = players[myIndex]?.id ?? null;
     this.seatChars = players.map((p, i) => {
       if (i === myIndex) return null;
       const key = `${p.id}:${arch[i]}`;
@@ -151,6 +182,7 @@ export class TableView {
       }
       entry.pos.copy(pos);
       entry.rotY = rotY;
+      this.charById.set(p.id, entry.char);
       return entry.char;
     });
     for (const [key, entry] of this.chars) {
@@ -164,6 +196,116 @@ export class TableView {
 
   charAt(seat) {
     return this.seatChars[seat] ?? null;
+  }
+
+  // ---------- Mitspieler im 3D-Client: Blick und Emotes ----------
+  /** Blick eines anderen Spielers (relativ zu seinem Platz, oder auf einen Spieler `at`). */
+  remoteLook(id, look) {
+    const c = this.charById?.get(id);
+    if (!c) return;
+    c.remote = look.yaw == null ? null : { yaw: look.yaw, pitch: look.pitch, at: look.at ?? null, until: now() + 6 };
+    if (!c.remote) c.remoteGoal = null;
+  }
+
+  remoteEmote(id, kind) {
+    const c = this.charById?.get(id);
+    c?.react(kind, now());
+    return !!c;
+  }
+
+  /**
+   * Eigenes Emote aus der Ich-Perspektive: Klopfen rüttelt die Kamera, beim Prost kommt
+   * der eigene Krug ins Bild, Lachen und Facepalm bewegen den Kopf.
+   */
+  selfEmote(kind) {
+    const t = now();
+    this.selfFx = { kind, t0: t };
+    if (kind === 'cheers' && this.egoActive()) {
+      if (!this.myMug) {
+        this.myMug = makeMug('#7a4a26');
+        this.myMug.traverse((o) => (o.castShadow = false));
+        this.camera.add(this.myMug);
+      }
+      this.myMug.visible = true;
+    }
+  }
+
+  /** Kamera-Versatz und eigener Krug für selfEmote (wird in updateCamera addiert). */
+  selfEffect(t, out) {
+    out.set(0, 0, 0);
+    const fx = this.selfFx;
+    if (!fx) return 0;
+    const s = t - fx.t0;
+    let pitch = 0;
+    if (fx.kind === 'knock') {
+      for (const hit of [0.35, 0.55, 0.75]) if (s > hit) out.y -= Math.exp(-(s - hit) * 22) * 0.018;
+      pitch -= 0.06 * envelopeT(s, 0.15, 1.0);
+      if (s > 1.3) this.selfFx = null;
+    } else if (fx.kind === 'laugh') {
+      const e = envelopeT(s, 0.2, 1.9);
+      out.y += Math.abs(Math.sin(s * 16)) * 0.01 * e;
+      pitch += 0.12 * e;
+      if (s > 2.1) this.selfFx = null;
+    } else if (fx.kind === 'facepalm') {
+      pitch -= 0.22 * envelopeT(s, 0.3, 1.7);
+      if (s > 1.9) this.selfFx = null;
+    } else if (fx.kind === 'cheer') {
+      out.y += Math.abs(Math.sin(s * 9)) * 0.03 * envelopeT(s, 0.1, 1.2);
+      if (s > 1.3) this.selfFx = null;
+    } else if (fx.kind === 'cheers') {
+      const m = this.myMug;
+      if (m) {
+        // von rechts unten hoch, nach vorn zum Anstoßen, dann trinken (Krug kippt zur Kamera), wieder runter
+        const up = envelopeT(s, 0.4, 2.45);
+        const toast = envelopeT(s - 0.45, 0.2, 0.65);
+        const drink = envelopeT(s - 1.2, 0.3, 0.95);
+        m.scale.setScalar(0.85);
+        m.position.set(0.3 - 0.18 * drink, -0.62 + 0.4 * up + 0.08 * toast + 0.04 * drink, -0.95 - 0.2 * toast + 0.33 * drink);
+        m.rotation.set(0.25 - 0.3 * toast + 1.1 * drink, -0.6, -0.12 + Math.sin(s * 22) * 0.05 * toast);
+        pitch += 0.1 * drink;
+        if (s > 2.5) {
+          m.visible = false;
+          this.selfFx = null;
+        }
+      } else this.selfFx = null;
+    } else this.selfFx = null;
+    return pitch;
+  }
+
+  /** Wohin ich gerade schaue (nur in der Ego-Perspektive): Richtung des Mausstrahls und wen ich ansehe. */
+  myGaze() {
+    if (!this.egoActive() || this.egoBlend < 0.9) return null;
+    this.raycaster.setFromCamera(_ndc.set(this.pointer.x, -this.pointer.y), this.camera);
+    const dir = this.raycaster.ray.direction;
+    let at = null;
+    let best = 0.16; // ~9°
+    for (const [id, c] of this.charById) {
+      const ang = c.headWorld(_v).sub(this.camera.position).normalize().angleTo(dir);
+      if (ang < best) {
+        best = ang;
+        at = id;
+      }
+    }
+    return { yaw: Math.atan2(-dir.x, -dir.z), pitch: Math.asin(clamp(dir.y, -1, 1)), at };
+  }
+
+  /** Blickziel der Figuren mit echtem Spielerblick aktualisieren. */
+  updateRemoteGaze(t) {
+    for (const [, c] of this.charById ?? []) {
+      const r = c.remote;
+      if (!r || t > r.until) {
+        c.remote = null;
+        c.remoteGoal = null;
+        continue;
+      }
+      const goal = (c.remoteGoal ??= new THREE.Vector3());
+      if (r.at && r.at === this.myId) goal.copy(this.camera.position); // schaut mich an
+      else if (r.at && this.charById.has(r.at)) this.charById.get(r.at).headWorld(goal);
+      else {
+        const cp = Math.cos(r.pitch);
+        c.root.localToWorld(goal.set(Math.sin(r.yaw) * cp * 2.5, 1.3 + Math.sin(r.pitch) * 2.5, Math.cos(r.yaw) * cp * 2.5));
+      }
+    }
   }
 
   // ---------- Zustand abgleichen ----------
@@ -204,7 +346,7 @@ export class TableView {
     this.deck.visible = false;
     this.glow.visible = false;
     this.glowFor = null;
-    this.ring.visible = false;
+    this.ringActive = false;
     this.dealing = false;
     this.collecting = 0;
     this.pending = null;
@@ -606,26 +748,34 @@ export class TableView {
     const active = ['bidding', 'playing', 'chooseTrump'].includes(g.phase) && g.turn != null;
     const t = now();
     this.seatChars.forEach((c, i) => c?.setTurn(active && g.turn === i, t));
-    this.ring.visible = active;
+    this.ringActive = active;
     if (active) ringSpot(this.angle(g.turn), this.ringTarget);
   }
 
   // ---------- Eigene Hand ----------
-  /** Weltpunkt knapp unter der Bildmitte, wo Karten in die Hand fliegen. */
-  handEntryWorld(out = new THREE.Vector3()) {
-    const { upp } = this.handLayout;
-    return this.camera.localToWorld(out.set(0, -innerHeight * 0.5 * upp * 0.9, -1));
+  // Die Hand hängt an der Kamera. Positionen und Größen werden in Bildschirmpixeln geführt
+  // und erst beim Zeichnen umgerechnet – so bleibt die Hand ruhig, wenn sich der Bildwinkel
+  // ändert (Wechsel Übersicht ↔ Ego-Perspektive).
+
+  /** Welteinheiten pro Bildschirmpixel im Abstand 1 vor der Kamera. */
+  upp() {
+    return (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2)) / innerHeight;
   }
 
-  addHandCard(card, instant) {
+  /** Weltpunkt knapp unter der Bildmitte, wo Karten in die Hand fliegen. */
+  handEntryWorld(out = new THREE.Vector3()) {
+    return this.camera.localToWorld(out.set(0, -innerHeight * 0.45 * this.upp(), -1));
+  }
+
+  addHandCard(card) {
     const obj = makeCard(card, 'hand');
     const hit = new THREE.Mesh(obj.userData.front.geometry, new THREE.MeshBasicMaterial({ visible: false }));
     hit.userData.cardId = card.id;
-    const h = { obj, hit, card, index: 0, lift: 0, x: 0, y: 0, rot: 0, s: 1, tx: 0, ty: 0, tr: 0, ts: 1, z: -1, legal: false };
-    obj.position.set(0, -innerHeight * 0.6 * this.handLayout.upp, -1);
+    const ch = this.handLayout.ch;
+    // startet dort, wo ausgeteilte Karten ankommen, und in deren Größe (0,12 m in 1 m Abstand)
+    const h = { obj, hit, card, index: 0, x: 0, y: -innerHeight * 0.45, rot: 0, s: 0.12 / this.upp(), tx: 0, ty: 0, tr: 0, ts: ch, z: -1 };
     this.handGroup.add(obj, hit);
     this.hand.set(card.id, h);
-    h.fresh = !instant;
     return h;
   }
 
@@ -639,20 +789,17 @@ export class TableView {
       }
     }
     sorted.forEach((card, i) => {
-      const h = this.hand.get(card.id) ?? this.addHandCard(card, instant);
+      const h = this.hand.get(card.id) ?? this.addHandCard(card);
       h.index = i;
     });
     this.layoutHand(instant);
   }
 
+  /** Zielplätze der Handkarten (in Pixeln relativ zur Bildmitte, y nach oben). */
   layoutHand(instant = false) {
-    const cam = this.camera;
-    const D = 1;
-    const vh = 2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) * D;
-    const upp = vh / innerHeight;
     const ch = clamp(innerHeight * 0.22, 120, 240);
     const cw = ch * CARD_ASPECT;
-    this.handLayout = { upp, ch };
+    this.handLayout = { ch };
     const list = [...this.hand.values()].sort((a, b) => a.index - b.index);
     const n = list.length;
     if (!n) return;
@@ -661,14 +808,11 @@ export class TableView {
     const maxRot = Math.min(0.16, 0.022 * n);
     list.forEach((h, i) => {
       const u = n > 1 ? (i - (n - 1) / 2) / ((n - 1) / 2) : 0;
-      h.tx = (i - (n - 1) / 2) * step * upp;
-      h.ty = (-innerHeight / 2 + ch * 0.4 - u * u * ch * 0.07) * upp;
+      h.tx = (i - (n - 1) / 2) * step;
+      h.ty = -innerHeight / 2 + ch * 0.4 - u * u * ch * 0.07;
       h.tr = -u * maxRot;
-      h.ts = ch * upp;
-      h.z = -D + i * 0.0006;
-      h.hit.position.set(h.tx, h.ty + ch * 0.12 * upp, h.z);
-      h.hit.rotation.z = h.tr;
-      h.hit.scale.set(h.ts, h.ts * 1.24, 1);
+      h.ts = ch;
+      h.z = -1 + i * 0.0006;
       if (instant) {
         h.x = h.tx;
         h.y = h.ty;
@@ -712,7 +856,8 @@ export class TableView {
   updateHand(dt) {
     const g = this.g;
     const active = this.canPlay();
-    const { upp, ch } = this.handLayout;
+    const { ch } = this.handLayout;
+    const upp = this.upp();
     const k = 1 - Math.exp(-dt * 14);
     for (const h of this.hand.values()) {
       const legal = !!g && g.legal.includes(h.card.id);
@@ -722,13 +867,17 @@ export class TableView {
       if (hover) lift += ch * (active ? 0.16 : 0.08);
       if (this.pending === h.card.id) lift += ch * 0.32;
       h.x += (h.tx - h.x) * k;
-      h.y += (h.ty + lift * upp - h.y) * k;
+      h.y += (h.ty + lift - h.y) * k;
       h.rot += ((hover ? h.tr * 0.4 : h.tr) - h.rot) * k;
       const ts = h.ts * (hover ? 1.07 : 1);
       h.s += (ts - h.s) * k;
-      h.obj.position.set(h.x, h.y, h.z + (hover ? 0.02 : 0));
+      h.obj.position.set(h.x * upp, h.y * upp, h.z + (hover ? 0.02 : 0));
       h.obj.rotation.set(0, 0, h.rot);
-      h.obj.scale.setScalar(h.s);
+      h.obj.scale.setScalar(h.s * upp);
+      // Trefferfläche bleibt am Zielplatz (sonst flackert das Anheben unter der Maus)
+      h.hit.position.set(h.tx * upp, (h.ty + ch * 0.12) * upp, h.z);
+      h.hit.rotation.z = h.tr;
+      h.hit.scale.set(h.ts * upp, h.ts * upp * 1.24, 1);
       const order = 1000 + (hover ? 200 : h.index * 2);
       h.obj.userData.front.renderOrder = order;
       h.obj.userData.back.renderOrder = order;
@@ -754,7 +903,7 @@ export class TableView {
     if (key === this.fitKey) return;
     this.fitKey = key;
     const cam = this.scratchCam;
-    cam.fov = this.camera.fov;
+    cam.fov = OVERVIEW_FOV;
     cam.aspect = (innerWidth - this.inset) / innerHeight;
     cam.near = 0.05;
     cam.far = 40;
@@ -805,6 +954,76 @@ export class TableView {
     this.fit.look.copy(look);
   }
 
+  /**
+   * Augenpunkt und Bildwinkel der Ego-Perspektive: Die Gegenüber (nicht die direkten
+   * Sitznachbarn) sollen ganz im Bild sein. Bei drei Spielern sitzen beide schräg gegenüber,
+   * dann lehnt man sich etwas zurück und der Bildwinkel wird weiter.
+   */
+  egoFit() {
+    const key = `${this.n}|${innerWidth}x${innerHeight}`;
+    if (this.egoFitKey === key) return this.egoFitCache;
+    const eye = EGO.eye.clone();
+    if (this.n === 3) eye.z += 0.22;
+    let need = 0;
+    for (let rel = 1; rel < this.n; rel++) {
+      const a = (rel * Math.PI * 2) / this.n;
+      if (Math.abs(Math.cos(a)) < 0.3) continue; // Sitznachbar direkt neben mir
+      const p = seatPos(a);
+      need = Math.max(need, Math.atan2(Math.abs(p.x), eye.z - p.z));
+    }
+    const half = need + THREE.MathUtils.degToRad(7); // halbe Körperbreite Rand
+    const aspect = innerWidth / innerHeight;
+    const vfov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(half) / aspect));
+    this.egoFitKey = key;
+    this.egoFitCache = { eye, fov: clamp(vfov, EGO.fov, 66) };
+    return this.egoFitCache;
+  }
+
+  /** Ego-Perspektive nur im laufenden Spiel; Lobby und Start bleiben in der Übersicht. */
+  egoActive() {
+    return this.mode === 'seat' && !!this.g && this.view === 'ego';
+  }
+
+  setView(view) {
+    this.view = view === 'overview' ? 'overview' : 'ego';
+  }
+
+  /** Mausposition für den Blick in der Ego-Perspektive (-1 … 1, y nach unten). */
+  setPointer(x, y) {
+    this.pointer.x = clamp(x, -1, 1);
+    this.pointer.y = clamp(y, -1, 1);
+  }
+
+  /** Kopfdrehung aus der Mausposition: Mitte ruhig, zum Rand hin immer weiter. */
+  updateHead(dt) {
+    const { x, y } = this.pointer;
+    const u = clamp((Math.abs(x) - 0.2) / 0.8, 0, 1);
+    const yawGoal = -Math.sign(x) * EGO.maxYaw * u * u * (3 - 2 * u);
+    const pitchGoal = EGO.pitch - y * EGO.maxPitch;
+    const k = 1 - Math.exp(-dt * 4.5);
+    this.headYaw += (yawGoal - this.headYaw) * k;
+    this.headPitch += (pitchGoal - this.headPitch) * k;
+  }
+
+  /** Blickrichtung relativ zum eigenen Platz (für die anderen Spieler). */
+  headDirection() {
+    return { yaw: this.headYaw, pitch: this.headPitch };
+  }
+
+  egoPose(t) {
+    const fxPitch = this.selfEffect(t, _fx);
+    const yaw = this.headYaw;
+    const pitch = this.headPitch + fxPitch;
+    const down = clamp((EGO.pitch - pitch) / EGO.maxPitch, 0, 1); // beim Blick nach unten vorbeugen
+    this.egoPos.copy(this.egoFit().eye);
+    this.egoPos.z -= 0.12 * down;
+    this.egoPos.y += -0.03 * down + Math.sin(t * 1.7) * 0.004; // atmen
+    this.egoPos.x += Math.sin(t * 0.37) * 0.006;
+    this.egoPos.add(_fx);
+    const cp = Math.cos(pitch);
+    this.egoLook.set(-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp).multiplyScalar(2.5).add(this.egoPos);
+  }
+
   updateCamera(t, dt) {
     let pos;
     let look;
@@ -826,9 +1045,22 @@ export class TableView {
     // in der Mitte des freien Bereichs steht.
     this.insetCur += (this.inset - this.insetCur) * (1 - Math.exp(-dt * 4));
     if (Math.abs(this.insetCur - this.inset) < 0.5) this.insetCur = this.inset;
+
+    // Übergang zur Ego-Perspektive: Kamera „setzt sich hin“
+    this.updateHead(dt);
+    this.egoPose(t);
+    const goal = this.egoActive() ? 1 : 0;
+    this.egoBlend += (goal - this.egoBlend) * (1 - Math.exp(-dt * 2.6));
+    if (Math.abs(goal - this.egoBlend) < 0.001) this.egoBlend = goal;
+    const e = smooth(this.egoBlend);
+
     const cam = this.camera;
-    cam.aspect = innerWidth / innerHeight;
-    cam.updateProjectionMatrix();
+    const fov = OVERVIEW_FOV + (this.egoFit().fov - OVERVIEW_FOV) * e;
+    if (cam.fov !== fov || cam.aspect !== innerWidth / innerHeight) {
+      cam.fov = fov;
+      cam.aspect = innerWidth / innerHeight;
+      cam.updateProjectionMatrix();
+    }
     cam.position.copy(this.camPos);
     cam.lookAt(this.camLook);
     if (this.insetCur > 0.5) {
@@ -836,6 +1068,12 @@ export class TableView {
       const wpp = (2 * dist * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) / innerHeight;
       const right = _v.set(1, 0, 0).applyQuaternion(cam.quaternion);
       cam.position.addScaledVector(right, -(this.insetCur / 2) * wpp);
+    }
+    if (e > 0) {
+      _v.copy(cam.position).lerp(this.egoPos, e);
+      _v2.copy(this.camLook).lerp(this.egoLook, e);
+      cam.position.copy(_v);
+      cam.lookAt(_v2);
     }
   }
 
@@ -852,6 +1090,7 @@ export class TableView {
     if (this.mode === 'seat') {
       this.camPos.copy(this.fit.pos);
       this.camLook.copy(this.fit.look);
+      this.egoBlend = this.egoActive() ? 1 : 0;
     }
   }
 
@@ -859,6 +1098,7 @@ export class TableView {
   update(t, dt) {
     this.updateCamera(t, dt);
     this.camera.updateMatrixWorld();
+    this.updateRemoteGaze(t);
     const g = this.g;
     // Wohin die Gäste schauen
     const focus = _v.set(0, TABLE.y, 0);
@@ -879,7 +1119,8 @@ export class TableView {
       c.camPos.copy(this.camera.position);
       c.update(t, dt);
     });
-    // Leuchtring
+    // Leuchtring (in der Ego-Perspektive nicht vor mir selbst – den sähe man nur riesig von oben)
+    this.ring.visible = !!this.ringActive && !(this.egoBlend > 0.5 && g?.turn === this.mySeat);
     if (this.ring.visible) {
       this.ring.position.lerp(this.ringTarget, 1 - Math.exp(-dt * 8));
       this.ring.material.opacity = 0.55 + Math.sin(t * 4) * 0.25;
@@ -891,7 +1132,8 @@ export class TableView {
     if (this.mode === 'orbit' && t > (this.demoAt ?? 0)) {
       this.demoAt = t + 2.5 + Math.random() * 2.5;
       const cs = this.seatChars.filter(Boolean);
-      if (cs.length) cs[Math.floor(Math.random() * cs.length)].react(['win', 'bid', 'shock', 'happy', 'wave', 'trump'][Math.floor(Math.random() * 6)], t);
+      const kinds = ['win', 'bid', 'shock', 'happy', 'wave', 'trump', 'cheers', 'knock', 'laugh', 'facepalm'];
+      if (cs.length) cs[Math.floor(Math.random() * cs.length)].react(kinds[Math.floor(Math.random() * kinds.length)], t);
     }
     // Jubel am Spielende
     if (g?.phase === 'gameOver' && t > this.cheerAt) {
@@ -902,12 +1144,28 @@ export class TableView {
     this.updateHand(dt);
   }
 
+  /** Bildschirmposition des Kopfes eines Spielers (für Tests). */
+  headScreenPoint(id) {
+    const c = this.charById?.get(id);
+    if (!c) return null;
+    const p = c.headWorld(new THREE.Vector3()).project(this.camera);
+    return { x: ((p.x + 1) / 2) * innerWidth, y: ((1 - p.y) / 2) * innerHeight, z: p.z };
+  }
+
   /** Bildschirmposition über dem Kopf eines Gastes (für Namensschilder). */
   labelPoint(seat) {
     const c = this.charAt(seat);
     if (!c) return null;
-    const p = c.labelAnchor.getWorldPosition(new THREE.Vector3()).project(this.camera);
-    if (p.z > 1) return null;
-    return { x: ((p.x + 1) / 2) * innerWidth, y: ((1 - p.y) / 2) * innerHeight };
+    const w = c.labelAnchor.getWorldPosition(new THREE.Vector3());
+    const local = _v2.copy(w).applyMatrix4(this.camera.matrixWorldInverse);
+    if (local.z > -0.05) {
+      // hinter der Kamera (Ego-Perspektive, Sitznachbar): Schild an den Bildrand
+      const off = local.x < 0 ? -1 : 1;
+      return { x: off < 0 ? 0 : innerWidth, y: innerHeight * 0.36, off };
+    }
+    const p = w.project(this.camera);
+    const x = ((p.x + 1) / 2) * innerWidth;
+    const y = ((1 - p.y) / 2) * innerHeight;
+    return { x, y, off: x < 0 ? -1 : x > innerWidth ? 1 : 0 };
   }
 }

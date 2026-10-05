@@ -88,6 +88,8 @@ function connect() {
       if (!state && /Raum|Spiel läuft schon|voll/.test(msg.message)) leaveLocal(false);
     } else if (msg.type === 'left') {
       leaveLocal(true);
+    } else if (msg.type === 'emote') {
+      showEmote(msg.id, msg.kind);
     }
   });
   ws.addEventListener('close', () => {
@@ -233,6 +235,20 @@ function show(screen) {
   for (const s of ['start', 'lobby', 'game']) $(`screen-${s}`).hidden = s !== screen;
 }
 
+// Emotes von Spielern in der 3D-Ansicht als Sprechblase am Platz bzw. in der Lobby-Liste
+const EMOTE_TEXT = { wave: '👋 Hallo!', cheers: '🍺 Prost!', knock: '✊ Klopf, klopf!', cheer: '🎉 Jaaa!', laugh: '😂 Hahaha!', facepalm: '🤦 Oh nein …' };
+const emotes = new Map(); // Spieler-Id -> { text, until }
+function showEmote(id, kind) {
+  if (!state || !EMOTE_TEXT[kind]) return;
+  emotes.set(id, { text: EMOTE_TEXT[kind], until: Date.now() + 2600 });
+  render();
+  setTimeout(() => state && render(), 2700);
+}
+function emoteFor(id) {
+  const e = emotes.get(id);
+  return e && e.until > Date.now() ? e.text : null;
+}
+
 function render() {
   if (!state) {
     show('start');
@@ -261,6 +277,7 @@ function renderLobby() {
       h('li', {},
         h('span', { class: `dot${p.online ? '' : ' off'}`, title: p.online ? 'online' : 'offline' }),
         h('span', { class: 'name' }, p.name),
+        emoteFor(p.id) && h('span', { class: 'lobby-emote' }, emoteFor(p.id)),
         p.id === room.hostId && h('span', { class: 'tag' }, 'Host'),
         p.id === me && h('span', { class: 'tag you' }, 'Du'),
       ),
@@ -442,7 +459,9 @@ function seatEl(g, i, x, y, crowns) {
   const s = g.seats[i];
   const offline = !isOnline(s.id);
   const statClass = s.bid == null ? '' : s.tricks === s.bid ? ' hit' : s.tricks > s.bid ? ' over' : '';
+  const emote = emoteFor(s.id);
   return h('div', { class: `seat${g.turn === i ? ' turn' : ''}${offline ? ' offline' : ''}`, style: `--x:${x.toFixed(1)}%;--y:${y.toFixed(1)}%` },
+    emote && h('div', { class: 'seat-bubble' }, emote),
     h('div', { class: 'seat-name' },
       crowns.has(s.id) && icon('crown'),
       h('span', { class: 'nm' }, s.name),
