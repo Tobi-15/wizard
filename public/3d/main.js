@@ -430,6 +430,12 @@ function renderPicker() {
   const f = figureByKey[current];
   $('pick-name').textContent = f?.name ?? '';
   $('pick-blurb').textContent = f?.blurb ?? '';
+  $('pick-blurb').hidden = !f?.blurb;
+  // Modell-Figuren: Urheber nennen (CC BY 4.0)
+  $('pick-credit').hidden = !f?.credit;
+  if (f?.credit) {
+    $('pick-credit').replaceChildren('3D-Modell: ', h('a', { href: f.credit.url, target: '_blank', rel: 'noopener' }, f.credit.author), ' · CC BY 4.0');
+  }
   $('pick-state').textContent = explicit ? 'Mit ‹ › oder den Pfeiltasten wechseln' : 'Automatisch zugeteilt – blättern zum Wählen';
   $('pick-dots').replaceChildren(
     ...FIGURES.map((fig) => {

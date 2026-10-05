@@ -6,3 +6,8 @@ node_modules/
 public/img/*.jpeg
 public/img/*.jpg
 public/img/*.png
+
+# Original-Downloads der 3D-Modelle (Sketchfab-ZIPs) nicht ins Repo, nur die verkleinerten GLBs in public/3d/models/
+public/3d/*.zip
+public/3d/models/*.zip
+public/3d/models/*.gltf

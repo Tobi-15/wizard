@@ -16,6 +16,7 @@ const TYPES = {
   '.jpeg': 'image/jpeg',
   '.ico': 'image/x-icon',
   '.webmanifest': 'application/manifest+json',
+  '.glb': 'model/gltf-binary',
 };
 
 async function serveStatic(req, res) {
@@ -36,7 +37,8 @@ async function serveStatic(req, res) {
     const body = await readFile(file);
     res.writeHead(200, {
       'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
-      'cache-control': 'no-cache',
+      // 3D-Modelle sind groß und ändern sich selten: einen Tag im Browser behalten
+      'cache-control': extname(file) === '.glb' ? 'public, max-age=86400' : 'no-cache',
     });
     res.end(body);
   } catch (err) {

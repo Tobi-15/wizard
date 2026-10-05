@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import { rng, clamp, envelope, smooth } from './util.js';
 import { backMaterial, cardGeometry } from './cards.js';
 import { mergeStatic } from './merge.js';
+import { loadModel, findBones, rotateWorld, aimBone, partOf } from './models.js';
+import { figureByKey } from '../figures.js';
 
 // ---------- Material- und Geometrie-Cache ----------
 const mats = new Map();
@@ -715,5 +717,145 @@ export class Character {
     const fy = _f.dot(_y);
     const fz = _f.dot(_z);
     arm.elbow.rotation.set(Math.atan2(-fz, -fy), 0, 0);
+  }
+}
+
+// ---------- Figuren aus 3D-Modellen ----------
+const _w = new THREE.Vector3();
+const _w2 = new THREE.Vector3();
+const _e2 = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+const _pole = new THREE.Vector3();
+const _rq = new THREE.Quaternion();
+const _rqi = new THREE.Quaternion();
+const _cq = new THREE.Quaternion();
+const _hq = new THREE.Quaternion();
+const _nq = new THREE.Quaternion();
+const _sq = new THREE.Quaternion();
+const _eu = new THREE.Euler();
+const HIP = new THREE.Vector3(0, 0.56, 0.0); // Hüftgelenke auf dem Stuhl (Stuhl-Koordinaten)
+const PALM = 0.07; // vom Handgelenk bis zur Handmitte (dorthin zielen die Handziele der Puppe)
+
+/** Neue Figur zum Schlüssel aus public/figures.js. */
+export function makeCharacter(key, seed) {
+  const fig = figureByKey[key];
+  if (fig?.model) return new ModelCharacter(fig, seed);
+  return new Character(archetypeIndex(key), seed);
+}
+
+/**
+ * Figur aus einem glTF-Modell. Darunter steckt eine unsichtbare Low-Poly-Puppe, die wie
+ * jede andere Figur schaut, reagiert und Handziele hat; ihre Bewegung wird jeden Frame auf
+ * die Knochen des Modells übertragen (Wirbelsäule, Hals/Kopf, Arme per IK). Stuhl, Krug und
+ * Kartenfächer der Puppe bleiben sichtbar. Bis das Modell geladen ist, sieht man die Puppe.
+ */
+export class ModelCharacter extends Character {
+  constructor(fig, seed) {
+    super(archetypeIndex(fig.fallback), seed);
+    this.fig = fig;
+    this.rig = null;
+    loadModel(`models/${fig.model}.glb`, { height: fig.height })
+      .then((model) => this.attachModel(model))
+      .catch((err) => console.warn(`Modell ${fig.model} lädt nicht, bleibe bei der Ersatzfigur`, err));
+  }
+
+  attachModel(model) {
+    const { bones, missing } = findBones(model);
+    if (missing.length) return console.warn(`Modell ${this.fig.model}: Knochen fehlen`, missing);
+    for (const c of this.root.children) if (c.isMesh) c.visible = false; // Beine der Puppe
+    this.body.traverse((o) => {
+      if (!o.isMesh) return;
+      for (let p = o; p; p = p.parent) if (p === this.fan) return;
+      o.visible = false;
+    });
+    this.root.add(model);
+    this.model = model;
+    this.rig = { bones, seatQ: new Map(), baseY: 0 };
+    this.seat();
+  }
+
+  /** Einmalig: aus der T-/A-Pose auf den Stuhl setzen und diese Pose merken. */
+  seat() {
+    const B = this.rig.bones;
+    this.root.updateMatrixWorld(true);
+    this.root.getWorldQuaternion(_rq);
+    const dir = (x, y, z) => _dir.set(x, y, z).applyQuaternion(_rq).normalize();
+    for (const [s, sx] of [['L', 1], ['R', -1]]) {
+      aimBone(B[`upLeg${s}`], B[`leg${s}`], dir(sx * 0.1, -0.12, 1));
+      aimBone(B[`leg${s}`], B[`foot${s}`], dir(0, -1, 0.1));
+      aimBone(B[`upperArm${s}`], B[`foreArm${s}`], dir(sx * 0.15, -1, 0.1));
+    }
+    const posed = [...B.spine, ...B.neck, B.head, B.upperArmL, B.upperArmR, B.foreArmL, B.foreArmR, B.handL, B.handR];
+    for (const b of posed) this.rig.seatQ.set(b, b.quaternion.clone());
+    // Hüftgelenke auf den Stuhl
+    const mid = this.root.worldToLocal(B.upLegL.getWorldPosition(_w).add(B.upLegR.getWorldPosition(_w2)).multiplyScalar(0.5));
+    this.model.position.add(_w2.copy(HIP).sub(mid));
+    this.rig.baseY = this.model.position.y;
+    this.model.updateMatrixWorld(true);
+    // Namensschild über den echten Kopf
+    const head = this.root.worldToLocal(B.head.getWorldPosition(_w));
+    this.labelAnchor.position.y = head.y + 0.36;
+  }
+
+  setMouth(kind) {
+    if (!this.rig) super.setMouth(kind);
+  }
+
+  headWorld(out = new THREE.Vector3()) {
+    if (!this.rig) return super.headWorld(out);
+    return this.rig.bones.head.getWorldPosition(out).add(_w.set(0, 0.1, 0));
+  }
+
+  update(t, dt) {
+    super.update(t, dt);
+    if (this.rig) this.drive();
+  }
+
+  /** Bewegung der Puppe auf das Modell übertragen. */
+  drive() {
+    const B = this.rig.bones;
+    for (const [bone, q] of this.rig.seatQ) bone.quaternion.copy(q);
+    this.model.position.y = this.rig.baseY + (this.body.position.y - 0.5);
+    this.model.updateMatrixWorld(true);
+    this.root.getWorldQuaternion(_rq);
+    _rqi.copy(_rq).invert();
+
+    // Oberkörper vorbeugen/neigen wie die Puppe, verteilt auf die Wirbel
+    if (B.spine.length) {
+      _cq.setFromEuler(_eu.set(this.body.rotation.x, 0, this.body.rotation.z));
+      _cq.premultiply(_rq).multiply(_rqi); // Stuhl-Raum → Welt
+      for (const b of B.spine) rotateWorld(b, partOf(_cq, 1 / B.spine.length, _sq));
+    }
+
+    // Kopf: Drehung des Puppenkopfs relativ zu seinem Hals, ein Teil davon in den Hals
+    this.neck.getWorldQuaternion(_nq);
+    _hq.copy(_nq).multiply(this.head.quaternion).multiply(_nq.invert());
+    const neckShare = B.neck.length ? 0.35 : 0;
+    for (const b of B.neck) rotateWorld(b, partOf(_hq, neckShare / B.neck.length, _sq));
+    rotateWorld(B.head, partOf(_hq, 1 - neckShare, _sq));
+
+    // Arme: Zwei-Knochen-IK zu den Handzielen der Puppe
+    this.armIK(B.upperArmL, B.foreArmL, B.handL, this.left.target, 1);
+    this.armIK(B.upperArmR, B.foreArmR, B.handR, this.right.target, -1);
+  }
+
+  armIK(upper, fore, hand, bodyTarget, side) {
+    const S = upper.getWorldPosition(new THREE.Vector3());
+    const E0 = fore.getWorldPosition(_w);
+    const H0 = hand.getWorldPosition(_w2);
+    const L1 = S.distanceTo(E0);
+    const L2 = E0.distanceTo(H0) + PALM;
+    const T = this.body.localToWorld(_e2.copy(bodyTarget));
+    const d = T.sub(S);
+    const D = clamp(d.length(), 0.05, (L1 + L2) * 0.999);
+    d.normalize();
+    const cosA = clamp((L1 * L1 + D * D - L2 * L2) / (2 * L1 * D), -1, 1);
+    const sinA = Math.sqrt(1 - cosA * cosA);
+    _pole.set(side * 0.45, -0.75, -0.35).applyQuaternion(_rq);
+    _pole.addScaledVector(d, -_pole.dot(d)).normalize();
+    const E = _w.copy(S).addScaledVector(d, cosA * L1).addScaledVector(_pole, sinA * L1);
+    aimBone(upper, fore, _dir.copy(E).sub(S).normalize());
+    const P = _w2.copy(S).addScaledVector(d, D);
+    aimBone(fore, hand, _dir.copy(P).sub(E).normalize());
   }
 }

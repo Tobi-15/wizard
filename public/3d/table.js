@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 import { makeCard, setCardFace, CARD_ASPECT, backMesh, handTint } from './cards.js';
-import { Character, archetypeIndex, flat, makeMug } from './characters.js';
+import { makeCharacter, flat, makeMug } from './characters.js';
 import { assignFigures } from '../figures.js';
 import { TABLE, seatAngle, seatPos, trickSpot, pileSpot, ringSpot, deckSpot, tangent } from './layout.js';
 import { tween, after, cancel, cancelGroup, now, hashStr, clamp, smooth, easeOut, easeInOut } from './util.js';
@@ -184,7 +184,7 @@ export class TableView {
       const pos = seatPos(a);
       const rotY = Math.atan2(-pos.x, -pos.z);
       if (!entry) {
-        const char = new Character(archetypeIndex(figs[i]), hashStr(p.id));
+        const char = makeCharacter(figs[i], hashStr(p.id));
         char.root.position.copy(pos);
         char.root.rotation.y = rotY;
         this.scene.add(char.root);
