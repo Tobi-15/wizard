@@ -25,6 +25,12 @@ for (const m of root.listMaterials()) {
   m.setOcclusionTexture(null);
   m.setMetallicRoughnessTexture(null);
   m.setEmissiveTexture(null);
+  // Material-Erweiterungen (Specular, Clearcoat, …) bringen nur weitere Texturen; die Kneipe nutzt Lambert
+  for (const ext of m.listExtensions()) ext.dispose();
+}
+// Texturen, die jetzt kein Material mehr benutzt, entfernen (prune erwischt sie nicht immer)
+for (const t of root.listTextures()) {
+  if (t.listParents().every((p) => p.propertyType === 'Root')) t.dispose();
 }
 const tris = () => root.listMeshes().reduce((a, m) => a + m.listPrimitives().reduce((b, p) => b + (p.getIndices()?.getCount() ?? p.getAttribute('POSITION').getCount()) / 3, 0), 0);
 console.log('vorher', Math.round(tris()), 'Dreiecke');

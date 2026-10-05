@@ -27,6 +27,31 @@ export const FIGURES = [
     key: 'epstein', name: 'Epstein', model: 'epstein', fallback: 'gentleman', height: 1.8,
     credit: { author: 'SigmaGrindsetMog', url: 'https://sketchfab.com/3d-models/jeffrey-epstein-bd6c6bf543184c8da1f457fc7bf0c494' },
   },
+  {
+    // eigenes Skelett mit eigenen Namen; der runde Körper hängt an den Hals-/Kopfknochen
+    key: 'mike', name: 'Mike Wazowski', model: 'mike', fallback: 'goblin', height: 1.45,
+    hide: ['eyeouter'], // Schatten-Schicht ohne Alphakanal, würde das ganze Auge schwarz abdecken
+    hands: [0.17, -0.04, 0], // Karten neben statt vor dem großen Auge
+    bones: {
+      hips: 'root hips', spine: [], neck: ['head neck lower'], head: 'head neck upper',
+      upperArmL: 'arm left shoulder 2', foreArmL: 'arm left elbow', handL: 'arm left wrist',
+      upperArmR: 'arm right shoulder 2', foreArmR: 'arm right elbow', handR: 'arm right wrist',
+      upLegL: 'leg left thigh', legL: 'leg left knee', footL: 'leg left ankle',
+      upLegR: 'leg right thigh', legR: 'leg right knee', footR: 'leg right ankle',
+    },
+    credit: { author: 'Guilherme Navarro', url: 'https://sketchfab.com/3d-models/mike-wazowski-monsters-inc-kh3-4861367425474a119eecde16ae5a1b75' },
+  },
+  {
+    // ohne Skelett und praktisch ohne Beine: wird nur auf den Stuhl gesetzt
+    key: 'chungus', name: 'Big Chungus', model: 'chungus', fallback: 'dwarf', height: 1.2, pose: 'blob',
+    rig: { hips: 0.22, spine: 0.38, chest: 0.5, neck: 0.62, head: 0.7, shoulderY: 0.58, shoulderX: 0.21, legs: false },
+    credit: { author: 'L3gap4', url: 'https://sketchfab.com/3d-models/bugs-bunny-big-chungus-meme-1d10a18d04e2409dbcb77348873489bf' },
+  },
+  {
+    // ohne Skelett, Baumstamm-Körper auf dünnen Beinen
+    key: 'tung', name: 'Tung Tung Tung Sahur', model: 'tung', fallback: 'orc', height: 1.5,
+    rig: { hips: 0.4, spine: 0.5, chest: 0.62, neck: 0.74, head: 0.82, shoulderY: 0.675, shoulderX: 0.107, upLeg: 0.38, knee: 0.19, ankle: 0.04 },
+  },
 ];
 
 export const FIGURE_KEYS = FIGURES.map((f) => f.key);

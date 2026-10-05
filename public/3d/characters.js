@@ -734,6 +734,7 @@ const _nq = new THREE.Quaternion();
 const _sq = new THREE.Quaternion();
 const _eu = new THREE.Euler();
 const HIP = new THREE.Vector3(0, 0.56, 0.0); // Hüftgelenke auf dem Stuhl (Stuhl-Koordinaten)
+const SEAT_TOP = 0.47; // Sitzfläche (für Figuren ohne Beine)
 const PALM = 0.07; // vom Handgelenk bis zur Handmitte (dorthin zielen die Handziele der Puppe)
 
 /** Neue Figur zum Schlüssel aus public/figures.js. */
@@ -754,13 +755,21 @@ export class ModelCharacter extends Character {
     super(archetypeIndex(fig.fallback), seed);
     this.fig = fig;
     this.rig = null;
-    loadModel(`models/${fig.model}.glb`, { height: fig.height })
+    // Ruhehaltung der Hände pro Figur verschieben ([außen, hoch, vor]), z. B. damit kleine
+    // Figuren ihre Karten nicht vor dem Gesicht halten
+    if (fig.hands) {
+      const [x, y, z] = fig.hands;
+      this.base.left.add(_w.set(x, y, z));
+      this.base.right.add(_w.set(-x, y, z));
+    }
+    loadModel(`models/${fig.model}.glb`, { height: fig.height, rig: fig.rig, hide: fig.hide })
       .then((model) => this.attachModel(model))
       .catch((err) => console.warn(`Modell ${fig.model} lädt nicht, bleibe bei der Ersatzfigur`, err));
   }
 
   attachModel(model) {
-    const { bones, missing } = findBones(model);
+    this.blob = this.fig.pose === 'blob'; // Figur ohne richtige Beine: nur auf den Stuhl setzen
+    const { bones, missing } = findBones(model, this.fig.bones, { legs: !this.blob });
     if (missing.length) return console.warn(`Modell ${this.fig.model}: Knochen fehlen`, missing);
     for (const c of this.root.children) if (c.isMesh) c.visible = false; // Beine der Puppe
     this.body.traverse((o) => {
@@ -781,15 +790,24 @@ export class ModelCharacter extends Character {
     this.root.getWorldQuaternion(_rq);
     const dir = (x, y, z) => _dir.set(x, y, z).applyQuaternion(_rq).normalize();
     for (const [s, sx] of [['L', 1], ['R', -1]]) {
-      aimBone(B[`upLeg${s}`], B[`leg${s}`], dir(sx * 0.1, -0.12, 1));
-      aimBone(B[`leg${s}`], B[`foot${s}`], dir(0, -1, 0.1));
+      if (!this.blob) {
+        aimBone(B[`upLeg${s}`], B[`leg${s}`], dir(sx * 0.1, -0.12, 1));
+        aimBone(B[`leg${s}`], B[`foot${s}`], dir(0, -1, 0.1));
+      }
       aimBone(B[`upperArm${s}`], B[`foreArm${s}`], dir(sx * 0.15, -1, 0.1));
     }
     const posed = [...B.spine, ...B.neck, B.head, B.upperArmL, B.upperArmR, B.foreArmL, B.foreArmR, B.handL, B.handR];
     for (const b of posed) this.rig.seatQ.set(b, b.quaternion.clone());
-    // Hüftgelenke auf den Stuhl
-    const mid = this.root.worldToLocal(B.upLegL.getWorldPosition(_w).add(B.upLegR.getWorldPosition(_w2)).multiplyScalar(0.5));
-    this.model.position.add(_w2.copy(HIP).sub(mid));
+    if (this.blob) {
+      // Unterseite auf die Sitzfläche, etwas nach hinten an die Lehne
+      const box = new THREE.Box3().setFromObject(this.model);
+      const bottom = this.root.worldToLocal(_w.set((box.min.x + box.max.x) / 2, box.min.y, (box.min.z + box.max.z) / 2));
+      this.model.position.add(_w2.set(-bottom.x, SEAT_TOP - bottom.y, -0.06 - bottom.z));
+    } else {
+      // Hüftgelenke auf den Stuhl
+      const mid = this.root.worldToLocal(B.upLegL.getWorldPosition(_w).add(B.upLegR.getWorldPosition(_w2)).multiplyScalar(0.5));
+      this.model.position.add(_w2.copy(HIP).sub(mid));
+    }
     this.rig.baseY = this.model.position.y;
     this.model.updateMatrixWorld(true);
     // Namensschild über den echten Kopf

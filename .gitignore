@@ -9,5 +9,7 @@ public/img/*.png
 
 # Original-Downloads der 3D-Modelle (Sketchfab-ZIPs) nicht ins Repo, nur die verkleinerten GLBs in public/3d/models/
 public/3d/*.zip
+public/3d/*.glb
+public/3d/*.gltf
 public/3d/models/*.zip
 public/3d/models/*.gltf

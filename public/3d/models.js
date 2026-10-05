@@ -11,13 +11,20 @@ const loader = new GLTFLoader();
 loader.setMeshoptDecoder(MeshoptDecoder);
 const templates = new Map(); // url -> Promise<Object3D>
 
-/** Lädt ein Modell (einmal pro Datei) und gibt eine eigene Kopie mit eigenem Skelett zurück. */
-export async function loadModel(url, { height = 1.75 } = {}) {
-  if (!templates.has(url)) templates.set(url, loader.loadAsync(url).then((g) => prepare(g.scene, height)));
+/**
+ * Lädt ein Modell (einmal pro Datei) und gibt eine eigene Kopie mit eigenem Skelett zurück.
+ * rig: Proportionen für das automatische Skelett (siehe autoRig), nur bei Modellen ohne Skelett.
+ */
+export async function loadModel(url, { height = 1.75, rig = {}, hide = [] } = {}) {
+  if (!templates.has(url)) templates.set(url, loader.loadAsync(url).then((g) => prepare(g.scene, height, rig, hide)));
   return SkeletonUtils.clone(await templates.get(url));
 }
 
-function prepare(scene, height) {
+/** hide: Teile weglassen, deren Materialname einen dieser Texte enthält (z. B. kaputte Overlay-Schichten). */
+function prepare(scene, height, rig, hide) {
+  const drop = [];
+  scene.traverse((o) => o.isMesh && hide.some((h) => o.material?.name?.includes(h)) && drop.push(o));
+  for (const o of drop) o.removeFromParent();
   scene.updateMatrixWorld(true);
   let skinned = false;
   scene.traverse((o) => {
@@ -25,7 +32,7 @@ function prepare(scene, height) {
     // Unbeleuchtete Modelle kommen oft ohne Normalen – für Kerzenlicht braucht es sie
     if (o.isMesh && !o.geometry.attributes.normal) o.geometry.computeVertexNormals();
   });
-  if (!skinned) autoRig(scene);
+  if (!skinned) autoRig(scene, rig);
 
   // Materialien wie im Rest der Kneipe: Lambert (günstig, reagiert auf Kerzenlicht und Nebel)
   scene.traverse((o) => {
@@ -78,11 +85,15 @@ const ROLE_NAMES = {
 
 /** Sketchfab hängt Nummern an („LeftArm_013“), Mixamo ein Präfix – beides weg. */
 function boneKey(name) {
-  return name.toLowerCase().replace(/^mixamorig:?/, '').replace(/_\d+$/, '');
+  return name.toLowerCase().replace(/\s+/g, '_').replace(/^mixamorig:?/, '').replace(/_\d+$/, '');
 }
 
-/** Rollen → Knochen. Wirbelsäule und Hals sind Ketten (spine, spine1, … bzw. neck, neck1, …). */
-export function findBones(root) {
+/**
+ * Rollen → Knochen. Wirbelsäule und Hals sind Ketten (spine, spine1, … bzw. neck, neck1, …).
+ * overrides: { rolle: 'knochenname' | ['kette', …] } für Modelle mit eigenen Namen.
+ * legs = false: Beine sind optional (Figuren, die nur auf den Stuhl gesetzt werden).
+ */
+export function findBones(root, overrides = {}, { legs = true } = {}) {
   const byKey = new Map();
   const depth = new Map();
   root.traverse((o) => {
@@ -98,8 +109,14 @@ export function findBones(root) {
   const chain = (re) => [...byKey.entries()].filter(([k]) => re.test(k)).map(([, b]) => b).sort((a, b) => depth.get(a) - depth.get(b));
   bones.spine = chain(/^(spine[_]?\d*|chest|upperchest)$/);
   bones.neck = chain(/^neck[_]?\d*$/);
-  const missing = ['hips', 'head', 'upperArmL', 'upperArmR', 'foreArmL', 'foreArmR', 'handL', 'handR', 'upLegL', 'upLegR', 'legL', 'legR', 'footL', 'footR'].filter((r) => !bones[r]);
-  return { bones, missing };
+  // three.js macht aus Leerzeichen in Knochennamen Unterstriche („arm left elbow“ → „arm_left_elbow“)
+  const ov = (n) => byKey.get(n.toLowerCase().replace(/\s+/g, '_'));
+  for (const [role, name] of Object.entries(overrides)) {
+    bones[role] = Array.isArray(name) ? name.map(ov).filter(Boolean) : (ov(name) ?? null);
+  }
+  const need = ['hips', 'head', 'upperArmL', 'upperArmR', 'foreArmL', 'foreArmR', 'handL', 'handR'];
+  if (legs) need.push('upLegL', 'upLegR', 'legL', 'legR', 'footL', 'footR');
+  return { bones, missing: need.filter((r) => !bones[r]) };
 }
 
 function floatAttr(a) {
@@ -111,7 +128,15 @@ function floatAttr(a) {
 // ---------- Automatisches Skelett für Modelle ohne Rig (T- oder A-Pose) ----------
 // Gelenke aus Körperproportionen und der Geometrie (Beinmitten, Handspitzen); jeder Vertex
 // hängt an den zwei nächstgelegenen Knochen. Reicht für Sitzen, Kopfdrehen und Arme.
-function autoRig(scene) {
+// Proportionen (Anteile der Höhe) lassen sich pro Figur anpassen, z. B. für Figuren mit
+// kurzen Beinen; legs: false lässt die Beine weg (Figur wird nur hingesetzt).
+const RIG = {
+  hips: 0.53, spine: 0.63, chest: 0.73, neck: 0.835, head: 0.875,
+  shoulderY: 0.8, shoulderX: 0.11, upLeg: 0.5, knee: 0.285, ankle: 0.045, legs: true,
+};
+
+function autoRig(scene, options = {}) {
+  const R = { ...RIG, ...options };
   const meshes = [];
   scene.traverse((o) => o.isMesh && meshes.push(o));
   // Geometrie in Szenenkoordinaten backen
@@ -136,30 +161,30 @@ function autoRig(scene) {
   const at = (fy) => y0 + fy * H;
   // Beinmitten auf Kniehöhe
   const legX = (side) => {
-    const xs = pts.filter((p) => Math.abs(p.y - at(0.28)) < H * 0.03 && Math.sign(p.x - cx) === side).map((p) => p.x);
+    const xs = pts.filter((p) => Math.abs(p.y - at(R.knee)) < H * 0.03 && Math.sign(p.x - cx) === side).map((p) => p.x);
     return xs.length ? xs.reduce((a, b) => a + b) / xs.length : cx + side * 0.055 * H;
   };
   // Handspitzen: äußerste Punkte links/rechts oberhalb der Hüfte
   const tip = (side) => pts.filter((p) => p.y > at(0.35)).reduce((best, p) => (side * (p.x - cx) > side * (best.x - cx) ? p : best));
   const J = {};
-  J.hips = new THREE.Vector3(cx, at(0.53), cz);
-  J.spine = new THREE.Vector3(cx, at(0.63), cz);
-  J.chest = new THREE.Vector3(cx, at(0.73), cz);
-  J.neck = new THREE.Vector3(cx, at(0.835), cz);
-  J.head = new THREE.Vector3(cx, at(0.875), cz);
+  J.hips = new THREE.Vector3(cx, at(R.hips), cz);
+  J.spine = new THREE.Vector3(cx, at(R.spine), cz);
+  J.chest = new THREE.Vector3(cx, at(R.chest), cz);
+  J.neck = new THREE.Vector3(cx, at(R.neck), cz);
+  J.head = new THREE.Vector3(cx, at(R.head), cz);
   J.headTop = new THREE.Vector3(cx, at(1.0), cz);
   for (const [s, side] of [['L', 1], ['R', -1]]) {
     // glTF-Figuren schauen nach +z, ihre linke Seite ist +x
-    J[`shoulder${s}`] = new THREE.Vector3(cx + side * 0.04 * H, at(0.8), cz);
-    J[`upperArm${s}`] = new THREE.Vector3(cx + side * 0.11 * H, at(0.8), cz);
+    J[`shoulder${s}`] = new THREE.Vector3(cx + side * R.shoulderX * 0.35 * H, at(R.shoulderY), cz);
+    J[`upperArm${s}`] = new THREE.Vector3(cx + side * R.shoulderX * H, at(R.shoulderY), cz);
     const t = tip(side);
     J[`handTip${s}`] = t.clone();
     J[`hand${s}`] = t.clone().lerp(J[`upperArm${s}`], (0.1 * H) / t.distanceTo(J[`upperArm${s}`]));
     J[`foreArm${s}`] = J[`upperArm${s}`].clone().lerp(J[`hand${s}`], 0.5);
     const lx = legX(side);
-    J[`upLeg${s}`] = new THREE.Vector3(lx, at(0.5), cz);
-    J[`leg${s}`] = new THREE.Vector3(lx, at(0.285), cz);
-    J[`foot${s}`] = new THREE.Vector3(lx, at(0.045), cz);
+    J[`upLeg${s}`] = new THREE.Vector3(lx, at(R.upLeg), cz);
+    J[`leg${s}`] = new THREE.Vector3(lx, at(R.knee), cz);
+    J[`foot${s}`] = new THREE.Vector3(lx, at(R.ankle), cz);
     J[`toe${s}`] = new THREE.Vector3(lx, at(0.01), cz + 0.07 * H);
   }
   // Hierarchie: Name, Eltern, Gelenk, Endpunkt (für den Abstand Vertex → Knochen)
@@ -171,8 +196,10 @@ function autoRig(scene) {
     defs.push(
       [`${n}shoulder`, 'chest', `shoulder${s}`, `upperArm${s}`], [`${n}arm`, `${n}shoulder`, `upperArm${s}`, `foreArm${s}`],
       [`${n}forearm`, `${n}arm`, `foreArm${s}`, `hand${s}`], [`${n}hand`, `${n}forearm`, `hand${s}`, `handTip${s}`],
-      [`${n}upleg`, 'hips', `upLeg${s}`, `leg${s}`], [`${n}leg`, `${n}upleg`, `leg${s}`, `foot${s}`], [`${n}foot`, `${n}leg`, `foot${s}`, `toe${s}`],
     );
+    if (R.legs) {
+      defs.push([`${n}upleg`, 'hips', `upLeg${s}`, `leg${s}`], [`${n}leg`, `${n}upleg`, `leg${s}`, `foot${s}`], [`${n}foot`, `${n}leg`, `foot${s}`, `toe${s}`]);
+    }
   }
   const bones = [];
   const byName = {};
