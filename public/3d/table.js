@@ -3,7 +3,8 @@
 
 import * as THREE from 'three';
 import { makeCard, setCardFace, CARD_ASPECT, backMesh, handTint } from './cards.js';
-import { Character, assignArchetypes, flat, makeMug } from './characters.js';
+import { Character, archetypeIndex, flat, makeMug } from './characters.js';
+import { assignFigures } from '../figures.js';
 import { TABLE, seatAngle, seatPos, trickSpot, pileSpot, ringSpot, deckSpot, tangent } from './layout.js';
 import { tween, after, cancel, cancelGroup, now, hashStr, clamp, smooth, easeOut, easeInOut } from './util.js';
 
@@ -14,6 +15,12 @@ const FAN_H = 0.17;
 
 // Kamera: Übersicht (von hinten oben, alle im Bild) oder Ego-Perspektive vom eigenen Platz
 const OVERVIEW_FOV = 40;
+// Lobby: Blick von über der Tischmitte auf die eigene Figur (Figurenauswahl)
+const SHOWCASE = {
+  fov: 54,
+  look: new THREE.Vector3(0, 1.02, TABLE.rz + 0.36),
+  pos: new THREE.Vector3(0.55, 1.62, -0.6),
+};
 const EGO = {
   fov: 56,
   eye: new THREE.Vector3(0, 1.36, TABLE.rz + 0.4),
@@ -153,25 +160,31 @@ export class TableView {
   }
 
   // ---------- Sitzordnung & Figuren ----------
-  setSeating(players, myIndex) {
+  /**
+   * players: [{ id, character }] in Sitzreihenfolge. Die eigene Figur gibt es nur mit
+   * withMe (Lobby: Figurenauswahl); im Spiel sitzt dort die Kamera.
+   */
+  setSeating(players, myIndex, { withMe = false } = {}) {
     const n = players.length;
     const changed = n !== this.n || myIndex !== this.mySeat;
     this.n = n;
     this.mySeat = myIndex;
-    const arch = assignArchetypes(players.map((p) => p.id), hashStr);
+    const figs = assignFigures(players, hashStr);
+    this.figures = figs;
     const keep = new Set();
     this.charById = new Map();
     this.myId = players[myIndex]?.id ?? null;
+    this.myChar = null;
     this.seatChars = players.map((p, i) => {
-      if (i === myIndex) return null;
-      const key = `${p.id}:${arch[i]}`;
+      if (i === myIndex && !withMe) return null;
+      const key = `${p.id}:${figs[i]}`;
       keep.add(key);
       let entry = this.chars.get(key);
       const a = seatAngle(i, myIndex, n);
       const pos = seatPos(a);
       const rotY = Math.atan2(-pos.x, -pos.z);
       if (!entry) {
-        const char = new Character(arch[i], hashStr(p.id));
+        const char = new Character(archetypeIndex(figs[i]), hashStr(p.id));
         char.root.position.copy(pos);
         char.root.rotation.y = rotY;
         this.scene.add(char.root);
@@ -182,7 +195,8 @@ export class TableView {
       }
       entry.pos.copy(pos);
       entry.rotY = rotY;
-      this.charById.set(p.id, entry.char);
+      if (i === myIndex) this.myChar = entry.char;
+      else this.charById.set(p.id, entry.char);
       return entry.char;
     });
     for (const [key, entry] of this.chars) {
@@ -219,6 +233,7 @@ export class TableView {
    */
   selfEmote(kind) {
     const t = now();
+    this.myChar?.react(kind, t); // in der Lobby sieht man die eigene Figur
     this.selfFx = { kind, t0: t };
     if (kind === 'cheers' && this.egoActive()) {
       if (!this.myMug) {
@@ -313,8 +328,8 @@ export class TableView {
   showLobby(room, meId) {
     this.clearGame();
     const idx = Math.max(0, room.players.findIndex((p) => p.id === meId));
-    this.setSeating(room.players, idx);
-    this.mode = 'seat';
+    this.setSeating(room.players, idx, { withMe: true });
+    this.mode = 'lobby';
   }
 
   showStart() {
@@ -358,7 +373,9 @@ export class TableView {
     const g = state.game;
     if (!g) return this.showLobby(state.room, state.me);
     this.mode = 'seat';
-    this.setSeating(g.seats, g.mySeat);
+    // gewählte Figuren stehen nur in der Spielerliste des Raums
+    const chosen = new Map(state.room.players.map((p) => [p.id, p.character]));
+    this.setSeating(g.seats.map((s) => ({ id: s.id, character: chosen.get(s.id) ?? null })), g.mySeat);
     const prev = this.g;
     this.g = g;
     const key = `${g.round}|${g.maxRounds}|${g.seats.map((s) => s.id).join(',')}`;
@@ -1031,6 +1048,12 @@ export class TableView {
       const a = t * 0.06;
       pos = _v.set(Math.sin(a) * 4.6, 2.3 + Math.sin(t * 0.2) * 0.15, Math.cos(a) * 4.0);
       look = new THREE.Vector3(0, 1.0, 0);
+    } else if (this.mode === 'lobby') {
+      // Figurenauswahl: von der Tischmitte aus auf die eigene Figur
+      pos = _v.copy(SHOWCASE.pos);
+      pos.x += Math.sin(t * 0.31) * 0.03;
+      pos.y += Math.sin(t * 0.43) * 0.02;
+      look = SHOWCASE.look;
     } else {
       this.computeFit();
       pos = _v.copy(this.fit.pos);
@@ -1055,7 +1078,12 @@ export class TableView {
     const e = smooth(this.egoBlend);
 
     const cam = this.camera;
-    const fov = OVERVIEW_FOV + (this.egoFit().fov - OVERVIEW_FOV) * e;
+    // Grund-Bildwinkel: Lobby (Figurenauswahl) weiter, sonst Übersicht; davon aus in die Ego-Perspektive
+    const baseGoal = this.mode === 'lobby' ? SHOWCASE.fov : OVERVIEW_FOV;
+    this.baseFov ??= baseGoal;
+    this.baseFov += (baseGoal - this.baseFov) * (1 - Math.exp(-dt * 2.2));
+    if (Math.abs(baseGoal - this.baseFov) < 0.01) this.baseFov = baseGoal;
+    const fov = this.baseFov + (this.egoFit().fov - this.baseFov) * e;
     if (cam.fov !== fov || cam.aspect !== innerWidth / innerHeight) {
       cam.fov = fov;
       cam.aspect = innerWidth / innerHeight;
@@ -1091,6 +1119,10 @@ export class TableView {
       this.camPos.copy(this.fit.pos);
       this.camLook.copy(this.fit.look);
       this.egoBlend = this.egoActive() ? 1 : 0;
+    } else if (this.mode === 'lobby') {
+      this.camPos.copy(SHOWCASE.pos);
+      this.camLook.copy(SHOWCASE.look);
+      this.baseFov = SHOWCASE.fov;
     }
   }
 
@@ -1134,6 +1166,14 @@ export class TableView {
       const cs = this.seatChars.filter(Boolean);
       const kinds = ['win', 'bid', 'shock', 'happy', 'wave', 'trump', 'cheers', 'knock', 'laugh', 'facepalm'];
       if (cs.length) cs[Math.floor(Math.random() * cs.length)].react(kinds[Math.floor(Math.random() * kinds.length)], t);
+    }
+    // Fülllicht kommt aus Kamerarichtung; in der Lobby also von vorn auf die eigene Figur
+    const fill = this.world.fill;
+    if (fill) {
+      const lobby = this.mode === 'lobby';
+      const kf = 1 - Math.exp(-dt * 2);
+      fill.position.lerp(_v.set(lobby ? 0.8 : 0, 3.2, lobby ? -5 : 6), kf);
+      fill.target.position.lerp(_v.set(0, 1, lobby ? 1.5 : -1), kf);
     }
     // Jubel am Spielende
     if (g?.phase === 'gameOver' && t > this.cheerAt) {

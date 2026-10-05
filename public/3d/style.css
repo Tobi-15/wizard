@@ -156,6 +156,7 @@ input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
 .player-list { list-style: none; padding: 0; margin: 0 0 1.2rem; display: grid; gap: 0.4rem; }
 .player-list li { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.75rem; border-radius: 10px; background: #efe5cd; }
 .player-list .name { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.player-list .fig { font-size: 0.78rem; color: #74685a; white-space: nowrap; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: #2fa66a; flex: none; }
 .dot.off { background: #b9b4a5; }
 .tag { font-size: 0.72rem; font-weight: 800; padding: 0.1rem 0.45rem; border-radius: 99px; background: #eadfbf; color: #5a4a1a; }
@@ -264,6 +265,39 @@ input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
 .podium-row.first { background: linear-gradient(90deg, #f3d488, var(--gold)); color: var(--gold-ink); }
 .podium-row .who { display: flex; align-items: center; gap: 6px; }
 .podium-row svg { width: 16px; height: 16px; }
+
+/* ---------- Figurenauswahl (Lobby) ---------- */
+.picker {
+  position: fixed; bottom: 26px; left: calc(50% + 250px); transform: translateX(-50%); z-index: 6;
+  pointer-events: auto; display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px; border-radius: 18px; width: min(460px, calc(100% - 560px));
+  background: rgba(20, 11, 6, 0.9); border: 1px solid rgba(233, 196, 106, 0.35);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); animation: rise 0.4s ease-out;
+}
+@media (max-width: 899px) { .picker { left: 50%; bottom: 12px; width: calc(100% - 24px); } }
+.pick-arrow {
+  appearance: none; flex: none; width: 46px; height: 46px; border-radius: 50%; cursor: pointer;
+  font: 700 1.8rem/1 var(--font-display); color: var(--gold-ink); padding: 0 0 4px;
+  background: linear-gradient(180deg, #f3d488, var(--gold)); border: none;
+  box-shadow: 0 2px 0 #b8913b, 0 6px 16px rgba(233, 196, 106, 0.2);
+}
+.pick-arrow:hover { background: linear-gradient(180deg, #f7dd9c, #eecb76); }
+.pick-arrow:active { transform: translateY(1px); }
+.pick-arrow:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.pick-info { flex: 1; min-width: 0; text-align: center; display: grid; gap: 4px; justify-items: center; }
+.pick-eyebrow { margin: 0; text-transform: uppercase; letter-spacing: 0.15em; font-size: 0.7rem; font-weight: 700; color: var(--muted); }
+.pick-name { margin: 0; font-family: var(--font-display); font-size: 1.5rem; letter-spacing: 0.05em; color: var(--gold); line-height: 1.1; }
+.pick-blurb { margin: 0; font-size: 0.9rem; color: var(--ink); }
+.pick-state { margin: 0; font-size: 0.78rem; color: var(--muted); min-height: 1em; }
+.pick-dots { display: flex; gap: 6px; justify-content: center; margin-top: 4px; }
+.pick-dot {
+  appearance: none; width: 12px; height: 12px; border-radius: 50%; padding: 0; cursor: pointer;
+  background: rgba(255, 240, 210, 0.22); border: 1px solid rgba(255, 240, 210, 0.3);
+}
+.pick-dot:hover { background: rgba(255, 240, 210, 0.45); }
+.pick-dot.mine { background: var(--gold); border-color: var(--gold); transform: scale(1.25); }
+.pick-dot.taken { background: transparent; border-color: rgba(255, 240, 210, 0.25); cursor: not-allowed; position: relative; }
+.pick-dot.taken::after { content: ''; position: absolute; inset: 4px; border-radius: 50%; background: rgba(255, 240, 210, 0.25); }
 
 /* ---------- Emotes ---------- */
 .icon-btn.emoji { font-size: 1.05rem; line-height: 1; }

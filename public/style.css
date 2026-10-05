@@ -159,6 +159,13 @@ input:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
 .dot.off { background: #b9b4a5; }
 .tag { font-size: 0.72rem; font-weight: 800; padding: 0.1rem 0.45rem; border-radius: 99px; background: #eadfbf; color: #5a4a1a; }
 .tag.you { background: #dcd5f5; color: #3d2a86; }
+.player-list .fig { font-size: 0.78rem; color: #7a7262; white-space: nowrap; }
+.figure-field { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin: -0.4rem 0 1rem; font-size: 0.9rem; font-weight: 700; }
+.figure-field select {
+  font: inherit; font-weight: 600; padding: 0.4rem 0.6rem; border-radius: 10px; border: 1px solid #d6cdb6;
+  background: #fff; color: var(--panel-ink); max-width: 60%;
+}
+.figure-field select:focus { outline: 2px solid var(--gold); outline-offset: 1px; }
 .toggle { display: flex; gap: 0.6rem; align-items: flex-start; cursor: pointer; margin-bottom: 0.6rem; }
 .toggle input { width: 18px; height: 18px; margin-top: 2px; flex: none; accent-color: #3d2a86; }
 .row { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 1rem; }

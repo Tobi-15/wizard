@@ -12,6 +12,9 @@ const MAX_NAME = 20;
 export const EMOTES = ['wave', 'cheers', 'knock', 'cheer', 'facepalm', 'laugh'];
 const LOOK_MIN_MS = 80; // höchstens ~12 Blick-Updates pro Sekunde und Verbindung
 const EMOTE_MIN_MS = 1000; // höchstens ein Emote pro Sekunde und Spieler
+// Spielfigur für die 3D-Kneipe. Welche Figuren es gibt, wissen nur die Clients
+// (public/figures.js); der Server prüft nur das Format und dass niemand doppelt ist.
+const CHARACTER_RE = /^[a-z][a-z0-9-]{0,23}$/;
 
 function makeCode(existing) {
   for (;;) {
@@ -61,6 +64,9 @@ export class Rooms {
         case 'setOption':
           this.setOption(room, player, msg);
           break;
+        case 'setCharacter':
+          this.setCharacter(room, player, msg.character);
+          break;
         case 'start':
           this.start(room, player);
           break;
@@ -100,19 +106,20 @@ export class Rooms {
     return { room, player };
   }
 
-  create(conn, { token, name }) {
+  create(conn, { token, name, character }) {
     if (typeof token !== 'string' || token.length < 8) throw new GameError('Ungültiges Token.');
     const code = makeCode(this.rooms);
     const room = { code, hostId: null, players: [], options: { noEvenBids: false }, game: null, touched: Date.now() };
     this.rooms.set(code, room);
     this.detach(conn);
     const player = this.addPlayer(room, token, cleanName(name));
+    this.wishCharacter(room, player, character);
     room.hostId = player.id;
     this.attach(conn, room, player);
     this.broadcast(room);
   }
 
-  join(conn, { token, name, code }) {
+  join(conn, { token, name, code, character }) {
     if (typeof token !== 'string' || token.length < 8) throw new GameError('Ungültiges Token.');
     const room = this.rooms.get(String(code ?? '').toUpperCase().trim());
     if (!room) throw new GameError('Diesen Raum gibt es nicht (mehr).');
@@ -121,6 +128,7 @@ export class Rooms {
       if (room.game) throw new GameError('Das Spiel läuft schon – neue Spieler können nicht mehr beitreten.');
       if (room.players.length >= MAX_PLAYERS) throw new GameError(`Der Raum ist voll (max. ${MAX_PLAYERS}).`);
       player = this.addPlayer(room, token, cleanName(name));
+      this.wishCharacter(room, player, character);
     } else if (!room.game && name) {
       player.name = cleanName(name); // Umbenennen in der Lobby
     }
@@ -131,7 +139,7 @@ export class Rooms {
   }
 
   addPlayer(room, token, name) {
-    const player = { id: randomBytes(6).toString('hex'), token, name, conns: new Set() };
+    const player = { id: randomBytes(6).toString('hex'), token, name, character: null, conns: new Set() };
     room.players.push(player);
     return player;
   }
@@ -184,6 +192,26 @@ export class Rooms {
     }
     if (room.hostId === player.id) room.hostId = room.players[0].id;
     this.broadcast(room);
+  }
+
+  /** Figur wählen (null = automatisch). Geht nicht während einer laufenden Partie. */
+  setCharacter(room, player, character) {
+    if (room.game && room.game.phase !== 'gameOver') throw new GameError('Die Figur kannst du nur vor dem Spiel wechseln.');
+    if (character !== null && (typeof character !== 'string' || !CHARACTER_RE.test(character))) {
+      throw new GameError('Unbekannte Figur.');
+    }
+    const owner = character && room.players.find((p) => p !== player && p.character === character);
+    if (owner) throw new GameError(`Diese Figur hat schon ${owner.name}.`);
+    player.character = character;
+  }
+
+  /** Mitgebrachte Lieblingsfigur beim Betreten übernehmen, wenn sie gültig und frei ist. */
+  wishCharacter(room, player, character) {
+    try {
+      if (character) this.setCharacter(room, player, character);
+    } catch {
+      // vergeben oder ungültig: dann eben automatisch
+    }
   }
 
   setOption(room, player, { key, value }) {
@@ -248,7 +276,7 @@ export class Rooms {
       code: room.code,
       hostId: room.hostId,
       options: room.options,
-      players: room.players.map((p) => ({ id: p.id, name: p.name, online: p.conns.size > 0 })),
+      players: room.players.map((p) => ({ id: p.id, name: p.name, online: p.conns.size > 0, character: p.character })),
     };
     for (const p of room.players) {
       const state = { type: 'state', me: p.id, room: lobby, game: room.game ? room.game.viewFor(p.id) : null };

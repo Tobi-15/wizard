@@ -78,3 +78,35 @@ test('Ohne Raum gibt es keinen Blick und kein Emote', () => {
   assert.equal(x.last('error').message, 'Du bist in keinem Raum.');
   rooms.close();
 });
+
+test('Figur wählen: eindeutig im Raum, null = automatisch', () => {
+  const rooms = new Rooms();
+  const { a, b, c, ids } = table(rooms);
+  rooms.handle(a, { type: 'setCharacter', character: 'pirate' });
+  assert.equal(c.last('state').room.players.find((p) => p.id === ids[0]).character, 'pirate');
+  rooms.handle(b, { type: 'setCharacter', character: 'pirate' });
+  assert.equal(b.last('error').message, 'Diese Figur hat schon Anna.');
+  rooms.handle(a, { type: 'setCharacter', character: null });
+  rooms.handle(b, { type: 'setCharacter', character: 'pirate' });
+  const players = c.last('state').room.players;
+  assert.deepEqual(players.map((p) => p.character), [null, 'pirate', null]);
+  rooms.handle(c, { type: 'setCharacter', character: 'Hack<script>' });
+  assert.equal(c.last('error').message, 'Unbekannte Figur.');
+  rooms.close();
+});
+
+test('Figur: beim Beitreten mitgebracht (wenn frei), während des Spiels gesperrt', () => {
+  const rooms = new Rooms();
+  const a = conn();
+  const b = conn();
+  const c = conn();
+  rooms.handle(a, { type: 'create', token: 'token-a-123', name: 'Anna', character: 'witch' });
+  const code = a.last('state').room.code;
+  rooms.handle(b, { type: 'join', token: 'token-b-123', name: 'Ben', code, character: 'witch' });
+  rooms.handle(c, { type: 'join', token: 'token-c-123', name: 'Cem', code, character: 'orc' });
+  assert.deepEqual(c.last('state').room.players.map((p) => p.character), ['witch', null, 'orc']);
+  rooms.handle(a, { type: 'start' });
+  rooms.handle(b, { type: 'setCharacter', character: 'dwarf' });
+  assert.equal(b.last('error').message, 'Die Figur kannst du nur vor dem Spiel wechseln.');
+  rooms.close();
+});

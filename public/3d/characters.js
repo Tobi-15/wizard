@@ -70,19 +70,9 @@ export const ARCHETYPES = [
   { key: 'orc', build: 'stout', skins: ['#8a9a72', '#7a8a6a', '#96a07a'], cloths: ['#5b3b2b', '#3b3b3b', '#4a2a2a'], hair: '#1a1a1a', pants: '#2a2018' },
 ];
 
-/**
- * Verteilt Typen auf die Sitzplätze: jeder Spieler bekommt nach Möglichkeit seinen
- * „Wunschtyp“ aus seiner Id; doppelte werden der Reihe nach weitergeschoben.
- * Alle Clients rechnen gleich, also sieht jeder dieselben Figuren.
- */
-export function assignArchetypes(ids, hash) {
-  const used = new Set();
-  return ids.map((id) => {
-    let k = hash(id) % ARCHETYPES.length;
-    while (used.has(k) && used.size < ARCHETYPES.length) k = (k + 1) % ARCHETYPES.length;
-    used.add(k);
-    return k;
-  });
+/** Index in ARCHETYPES zu einem Figuren-Schlüssel aus public/figures.js. */
+export function archetypeIndex(key) {
+  return Math.max(0, ARCHETYPES.findIndex((a) => a.key === key));
 }
 
 const DARK = '#2a1512';

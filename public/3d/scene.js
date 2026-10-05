@@ -685,5 +685,5 @@ export function createWorld(container) {
     }
   }
 
-  return { renderer, scene, camera, animateEnv, adaptQuality, cheapSteps, perf, spot, lampY };
+  return { renderer, scene, camera, animateEnv, adaptQuality, cheapSteps, perf, spot, fill, lampY };
 }

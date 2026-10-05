@@ -1,6 +1,9 @@
 // Wizard – Browser-Client. Der Server ist die einzige Wahrheit; der Client
 // zeigt nur den Zustand an, den er zugeschickt bekommt, und sendet Aktionen.
 
+import { FIGURES, figureByKey, assignFigures } from './figures.js';
+import { hashStr } from './3d/util.js';
+
 const SUITS = ['red', 'yellow', 'green', 'blue'];
 const SUIT_NAMES = { red: 'Rot', yellow: 'Gelb', green: 'Grün', blue: 'Blau' };
 const SUIT_COLORS = { red: 'var(--red)', yellow: 'var(--yellow)', green: 'var(--green)', blue: 'var(--blue)' };
@@ -68,7 +71,7 @@ function connect() {
     reconnectDelay = 500;
     $('conn-banner').hidden = true;
     const name = store.get('wizard.name');
-    if (wantedRoom && name) send({ type: 'join', token, name, code: wantedRoom });
+    if (wantedRoom && name) send({ type: 'join', token, name, code: wantedRoom, character: store.get('wizard.character') });
     else render();
   });
   ws.addEventListener('message', (ev) => {
@@ -272,17 +275,29 @@ function renderLobby() {
   $('lobby-code').textContent = room.code;
   $('invite-link').value = `${location.origin}${location.pathname}?room=${room.code}`;
   $('lobby-count').textContent = `(${room.players.length}/6)`;
+  const figs = assignFigures(room.players, hashStr);
   $('lobby-players').replaceChildren(
-    ...room.players.map((p) =>
+    ...room.players.map((p, i) =>
       h('li', {},
         h('span', { class: `dot${p.online ? '' : ' off'}`, title: p.online ? 'online' : 'offline' }),
         h('span', { class: 'name' }, p.name),
         emoteFor(p.id) && h('span', { class: 'lobby-emote' }, emoteFor(p.id)),
+        h('span', { class: 'fig', title: 'Figur in der 3D-Kneipe' }, figureByKey[figs[i]]?.name),
         p.id === room.hostId && h('span', { class: 'tag' }, 'Host'),
         p.id === me && h('span', { class: 'tag you' }, 'Du'),
       ),
     ),
   );
+  // Figur für die 3D-Kneipe (die anderen sehen sie dort, auch wenn ich in 2D spiele)
+  const idx = room.players.findIndex((p) => p.id === me);
+  const mine = room.players[idx]?.character ?? '';
+  const takenBy = new Map(room.players.filter((p) => p.id !== me && p.character).map((p) => [p.character, p.name]));
+  const sel = $('figure-select');
+  sel.replaceChildren(
+    h('option', { value: '' }, `Automatisch (${figureByKey[figs[idx]]?.name ?? '–'})`),
+    ...FIGURES.map((f) => h('option', { value: f.key, disabled: takenBy.has(f.key) }, takenBy.has(f.key) ? `${f.name} – hat ${takenBy.get(f.key)}` : f.name)),
+  );
+  sel.value = mine;
   const opt = $('opt-noEvenBids');
   opt.checked = room.options.noEvenBids;
   opt.disabled = !isHost;
@@ -675,7 +690,7 @@ function requireName() {
 $('name-input').value = store.get('wizard.name') ?? '';
 $('btn-create').addEventListener('click', () => {
   const name = requireName();
-  if (name) send({ type: 'create', token, name });
+  if (name) send({ type: 'create', token, name, character: store.get('wizard.character') });
 });
 function joinFromInput() {
   const name = requireName();
@@ -683,7 +698,7 @@ function joinFromInput() {
   if (!name) return;
   if (code.length !== 4) return toast('Der Raumcode hat 4 Buchstaben.', true);
   wantedRoom = code;
-  send({ type: 'join', token, name, code });
+  send({ type: 'join', token, name, code, character: store.get('wizard.character') });
 }
 $('btn-join').addEventListener('click', joinFromInput);
 $('code-input').addEventListener('keydown', (e) => e.key === 'Enter' && joinFromInput());
@@ -693,6 +708,11 @@ $('name-input').addEventListener('keydown', (e) => {
   else $('btn-create').click();
 });
 
+$('figure-select').addEventListener('change', (e) => {
+  const key = e.target.value || null;
+  store.set('wizard.character', key);
+  send({ type: 'setCharacter', character: key });
+});
 $('btn-copy').addEventListener('click', async () => {
   const link = $('invite-link').value;
   try {

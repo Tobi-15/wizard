@@ -6,7 +6,8 @@ import * as THREE from 'three';
 import { createWorld } from './scene.js';
 import { TableView } from './table.js';
 import { SUITS, SUIT_NAMES, SUIT_HEX, cardImage, redrawAll, setAnisotropy } from './cards.js';
-import { updateTweens } from './util.js';
+import { updateTweens, hashStr } from './util.js';
+import { FIGURES, figureByKey, assignFigures } from '../figures.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const $ = (id) => document.getElementById(id);
@@ -111,7 +112,7 @@ function connect() {
     reconnectDelay = 500;
     $('conn-banner').hidden = true;
     const name = store.get('wizard.name');
-    if (wantedRoom && name) send({ type: 'join', token, name, code: wantedRoom });
+    if (wantedRoom && name) send({ type: 'join', token, name, code: wantedRoom, character: store.get('wizard.character') });
     else render();
   });
   ws.addEventListener('message', (ev) => {
@@ -386,16 +387,19 @@ function renderLobby() {
   $('lobby-code').textContent = room.code;
   $('invite-link').value = `${location.origin}${location.pathname}?room=${room.code}`;
   $('lobby-count').textContent = `(${room.players.length}/6)`;
+  const figs = assignFigures(room.players, hashStr);
   $('lobby-players').replaceChildren(
-    ...room.players.map((p) =>
+    ...room.players.map((p, i) =>
       h('li', {},
         h('span', { class: `dot${p.online ? '' : ' off'}`, title: p.online ? 'online' : 'offline' }),
         h('span', { class: 'name' }, p.name),
+        h('span', { class: 'fig', title: p.character ? 'gewählte Figur' : 'automatisch zugeteilt' }, figureByKey[figs[i]]?.name),
         p.id === room.hostId && h('span', { class: 'tag' }, 'Host'),
         p.id === me && h('span', { class: 'tag you' }, 'Du'),
       ),
     ),
   );
+  renderPicker();
   const opt = $('opt-noEvenBids');
   opt.checked = room.options.noEvenBids;
   opt.disabled = !isHost;
@@ -408,6 +412,55 @@ function renderLobby() {
     : isHost
       ? 'Alle da? Dann los!'
       : `Warte, bis ${hostName} das Spiel startet …`;
+}
+
+// ---------- Figurenauswahl ----------
+// Die eigene Figur sitzt in der Lobby am Platz und wird von vorn gezeigt. Wer nichts wählt,
+// bekommt automatisch eine; von anderen gewählte Figuren sind gesperrt.
+function figureState() {
+  const { room, me } = state;
+  const figs = assignFigures(room.players, hashStr);
+  const idx = room.players.findIndex((p) => p.id === me);
+  const takenBy = new Map(room.players.filter((p) => p.id !== me && p.character).map((p) => [p.character, p.name]));
+  return { figs, current: figs[idx], explicit: room.players[idx]?.character ?? null, takenBy };
+}
+
+function renderPicker() {
+  const { current, explicit, takenBy } = figureState();
+  const f = figureByKey[current];
+  $('pick-name').textContent = f?.name ?? '';
+  $('pick-blurb').textContent = f?.blurb ?? '';
+  $('pick-state').textContent = explicit ? 'Mit ‹ › oder den Pfeiltasten wechseln' : 'Automatisch zugeteilt – blättern zum Wählen';
+  $('pick-dots').replaceChildren(
+    ...FIGURES.map((fig) => {
+      const owner = takenBy.get(fig.key);
+      return h('button', {
+        class: `pick-dot${fig.key === current ? ' mine' : ''}${owner ? ' taken' : ''}`,
+        title: owner ? `${fig.name} – hat ${owner}` : fig.name,
+        'aria-label': owner ? `${fig.name}, vergeben an ${owner}` : fig.name,
+        'aria-pressed': String(fig.key === current),
+        disabled: !!owner,
+        onclick: () => chooseFigure(fig.key),
+      });
+    }),
+  );
+}
+
+function chooseFigure(key) {
+  if (!state || state.game) return;
+  store.set('wizard.character', key);
+  send({ type: 'setCharacter', character: key });
+}
+
+/** Zur nächsten freien Figur blättern (dir = ±1). */
+function stepFigure(dir) {
+  if (!state || state.game) return;
+  const { current, takenBy } = figureState();
+  let i = FIGURES.findIndex((f) => f.key === current);
+  for (let k = 0; k < FIGURES.length; k++) {
+    i = (i + dir + FIGURES.length) % FIGURES.length;
+    if (!takenBy.has(FIGURES[i].key)) return chooseFigure(FIGURES[i].key);
+  }
 }
 
 function suitChip(suit) {
@@ -836,7 +889,7 @@ function requireName() {
 $('name-input').value = store.get('wizard.name') ?? '';
 $('btn-create').addEventListener('click', () => {
   const name = requireName();
-  if (name) send({ type: 'create', token, name });
+  if (name) send({ type: 'create', token, name, character: store.get('wizard.character') });
 });
 function joinFromInput() {
   const name = requireName();
@@ -844,7 +897,7 @@ function joinFromInput() {
   if (!name) return;
   if (code.length !== 4) return toast('Der Raumcode hat 4 Buchstaben.', true);
   wantedRoom = code;
-  send({ type: 'join', token, name, code });
+  send({ type: 'join', token, name, code, character: store.get('wizard.character') });
 }
 $('btn-join').addEventListener('click', joinFromInput);
 $('code-input').addEventListener('keydown', (e) => e.key === 'Enter' && joinFromInput());
@@ -878,6 +931,8 @@ $('btn-sound').addEventListener('click', () => {
 });
 $('btn-scores').addEventListener('click', openScores);
 $('btn-view').addEventListener('click', toggleView);
+$('pick-prev').addEventListener('click', () => stepFigure(-1));
+$('pick-next').addEventListener('click', () => stepFigure(1));
 $('btn-emote').addEventListener('click', () => toggleEmoteMenu());
 addEventListener('pointerdown', (e) => {
   if (!$('emote-menu').hidden && !e.target.closest('#emote-menu, #btn-emote')) toggleEmoteMenu(false);
@@ -932,7 +987,14 @@ addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape') toggleEmoteMenu(false);
   const g = state.game;
-  if (!g) return;
+  if (!g) {
+    // Lobby: ←/→ blättert durch die Figuren
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.target.closest?.('button')) {
+      stepFigure(e.key === 'ArrowLeft' ? -1 : 1);
+      e.preventDefault();
+    }
+    return;
+  }
   if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey) {
     toggleView();
     return;

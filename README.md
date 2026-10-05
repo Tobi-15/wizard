@@ -4,7 +4,7 @@ Das Stichspiel Wizard für 3–6 Spieler im Browser. Spielen geht ohne Account: 
 
 Unter `/3d` gibt es dieselbe Partie als 3D-Kneipe mit Low-Poly-Figuren (für Desktop). Beide Ansichten spielen im selben Raum zusammen, man kann jederzeit wechseln.
 
-In der Kneipe sitzt man in der **Ego-Perspektive** am Tisch: Der Kopf folgt der Maus, und die anderen sehen, wohin man schaut. Mit **V** wechselt man in die Übersicht von oben. Mit den Tasten **1–6** (oder dem Krug-Knopf) gibt es Emotes: Winken, Prost, auf den Tisch klopfen, Jubeln, Lachen, Facepalm. Spieler in der 2D-Ansicht sehen die Emotes als Sprechblase.
+In der Lobby wählt jeder seine **Spielfigur** (Zauberer, Pirat, Goblin, Zwerg, Hexe, Gentleman, Cowboy, Ork), jede gibt es pro Tisch nur einmal. In der 2D-Ansicht geht das über eine Auswahlliste. In der Kneipe sitzt man dann in der **Ego-Perspektive** am Tisch: Der Kopf folgt der Maus, und die anderen sehen, wohin man schaut. Mit **V** wechselt man in die Übersicht von oben. Mit den Tasten **1–6** (oder dem Krug-Knopf) gibt es Emotes: Winken, Prost, auf den Tisch klopfen, Jubeln, Lachen, Facepalm. Spieler in der 2D-Ansicht sehen die Emotes als Sprechblase.
 
 ## Hausregel
 
