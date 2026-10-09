@@ -3,13 +3,16 @@
 
 import { randomBytes } from 'node:crypto';
 import { Game, GameError, MAX_PLAYERS, MIN_PLAYERS } from './game.js';
+import { VICE, SMOKE_MS, earnsCigar } from '../public/vices.js';
 
 const ROOM_TTL_MS = 30 * 60 * 1000;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // ohne I und O
 const MAX_NAME = 20;
 // Nur Darstellung (3D-Client): Blickrichtung und Emotes werden an die anderen weitergereicht,
 // ohne den Spielzustand zu berühren.
-export const EMOTES = ['wave', 'cheers', 'knock', 'cheer', 'facepalm', 'laugh'];
+// sip (Schluck Bier) und puff (Zug an Zigarette/Zigarre) gehören zur Theke.
+export const EMOTES = ['wave', 'cheers', 'knock', 'cheer', 'facepalm', 'laugh', 'sip', 'puff'];
+const ORDERS = ['beer', 'cigarette', 'cigar', 'putout'];
 const LOOK_MIN_MS = 80; // höchstens ~12 Blick-Updates pro Sekunde und Verbindung
 const EMOTE_MIN_MS = 1000; // höchstens ein Emote pro Sekunde und Spieler
 // Spielfigur für die 3D-Kneipe. Welche Figuren es gibt, wissen nur die Clients
@@ -61,6 +64,9 @@ export class Rooms {
           return this.relayLook(conn, room, player, msg);
         case 'emote':
           return this.relayEmote(room, player, msg);
+        case 'order':
+          this.order(room, player, msg.item);
+          break;
         case 'setOption':
           this.setOption(room, player, msg);
           break;
@@ -139,7 +145,11 @@ export class Rooms {
   }
 
   addPlayer(room, token, name) {
-    const player = { id: randomBytes(6).toString('hex'), token, name, character: null, conns: new Set() };
+    const player = {
+      id: randomBytes(6).toString('hex'), token, name, character: null, conns: new Set(),
+      // Theke: Bier (bestellt um beerAt, insgesamt beers), Rauchwaren, verdiente Zigarren, Kippen im Aschenbecher
+      vice: { beerAt: null, beers: 0, smoke: null, cigars: 0, butts: 0 },
+    };
     room.players.push(player);
     return player;
   }
@@ -226,12 +236,55 @@ export class Rooms {
     if (room.game && room.game.phase !== 'gameOver') throw new GameError('Das Spiel läuft schon.');
     if (room.players.length < MIN_PLAYERS) throw new GameError(`Es braucht mindestens ${MIN_PLAYERS} Spieler.`);
     room.game = new Game(room.players, room.options);
+    room.awarded = 0;
+  }
+
+  /**
+   * Theke: Bier bestellen (erst wieder, wenn das alte fast leer ist), Zigarette anzünden,
+   * Zigarre (nur mit verdienter Zigarre) oder ausdrücken. Ändert nichts am Spiel.
+   */
+  order(room, player, item) {
+    if (!ORDERS.includes(item)) throw new GameError('Gibt es hier nicht.');
+    const v = player.vice;
+    const t = Date.now();
+    settleSmoke(v, t);
+    if (item === 'beer') {
+      const full = v.beerAt != null && t - v.beerAt < VICE.serveMs + VICE.beerMs * (1 - VICE.refillBelow);
+      if (full) throw new GameError('Trink erst mal aus – dein Bier ist noch gut voll.');
+      v.beerAt = t;
+      v.beers += 1;
+    } else if (item === 'putout') {
+      if (!v.smoke) throw new GameError('Du rauchst gerade nichts.');
+      v.smoke = null;
+      v.butts += 1;
+    } else {
+      if (v.smoke) throw new GameError(v.smoke.kind === 'cigar' ? 'Du hast doch schon eine Zigarre.' : 'Du rauchst doch schon eine.');
+      if (item === 'cigar') {
+        if (v.cigars < 1) throw new GameError(`Zigarren gibt's nur für eine richtige Ansage von mindestens ${VICE.cigarMinBid} Stichen.`);
+        v.cigars -= 1;
+      }
+      v.smoke = { kind: item, at: t };
+    }
+  }
+
+  /** Nach jeder fertigen Runde: Zigarre für alle, die mehr als 3 Stiche richtig angesagt haben. */
+  awardCigars(room) {
+    const hist = room.game?.history ?? [];
+    for (let r = room.awarded ?? 0; r < hist.length; r++) {
+      room.game.players.forEach((gp, i) => {
+        if (!earnsCigar(hist[r].bids[i], hist[r].tricks[i])) return;
+        const p = room.players.find((x) => x.id === gp.id);
+        if (p) p.vice.cigars += 1;
+      });
+    }
+    room.awarded = hist.length;
   }
 
   scheduleCollect(room) {
     clearTimeout(room.trickTimer);
     room.trickTimer = setTimeout(() => {
       room.game?.collectTrick();
+      this.awardCigars(room);
       this.broadcast(room);
     }, this.trickDelayMs);
   }
@@ -276,7 +329,7 @@ export class Rooms {
       code: room.code,
       hostId: room.hostId,
       options: room.options,
-      players: room.players.map((p) => ({ id: p.id, name: p.name, online: p.conns.size > 0, character: p.character })),
+      players: room.players.map((p) => ({ id: p.id, name: p.name, online: p.conns.size > 0, character: p.character, vice: viceView(p.vice) })),
     };
     for (const p of room.players) {
       const state = { type: 'state', me: p.id, room: lobby, game: room.game ? room.game.viewFor(p.id) : null };
@@ -294,6 +347,26 @@ export class Rooms {
       }
     }
   }
+}
+
+/** Abgebrannte Zigarette/Zigarre landet als Kippe im Aschenbecher. */
+function settleSmoke(v, t) {
+  if (v.smoke && t - v.smoke.at > SMOKE_MS[v.smoke.kind] + VICE.serveMs) {
+    v.smoke = null;
+    v.butts += 1;
+  }
+}
+
+/** Theke-Zustand für die Clients: Alter statt Uhrzeit (die Uhren der Clients gehen anders). */
+function viceView(v) {
+  const t = Date.now();
+  settleSmoke(v, t);
+  return {
+    beer: v.beerAt == null ? null : { age: t - v.beerAt, n: v.beers },
+    smoke: v.smoke ? { kind: v.smoke.kind, age: t - v.smoke.at } : null,
+    cigars: v.cigars,
+    butts: Math.min(v.butts, 30),
+  };
 }
 
 function gameOf(room) {

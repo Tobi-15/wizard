@@ -110,3 +110,61 @@ test('Figur: beim Beitreten mitgebracht (wenn frei), während des Spiels gesperr
   assert.equal(b.last('error').message, 'Die Figur kannst du nur vor dem Spiel wechseln.');
   rooms.close();
 });
+
+test('Theke: Bier erst nachbestellen, wenn es fast leer ist', () => {
+  const rooms = new Rooms();
+  const { a, b, ids } = table(rooms);
+  rooms.handle(a, { type: 'order', item: 'beer' });
+  const vice = b.last('state').room.players.find((p) => p.id === ids[0]).vice;
+  assert.equal(vice.beer.n, 1);
+  assert.ok(vice.beer.age >= 0 && vice.beer.age < 1000);
+  rooms.handle(a, { type: 'order', item: 'beer' });
+  assert.match(a.last('error').message, /Trink erst mal aus/);
+  // Bier ist alt (fast leer): nachbestellen geht
+  const code = a.last('state').room.code;
+  rooms.rooms.get(code).players[0].vice.beerAt -= 60 * 60 * 1000;
+  rooms.handle(a, { type: 'order', item: 'beer' });
+  assert.equal(b.last('state').room.players[0].vice.beer.n, 2);
+  rooms.handle(a, { type: 'order', item: 'schnaps' });
+  assert.equal(a.last('error').message, 'Gibt es hier nicht.');
+  rooms.close();
+});
+
+test('Theke: Zigarette, ausdrücken, Zigarre nur verdient', () => {
+  const rooms = new Rooms();
+  const { a, c } = table(rooms);
+  const room = [...rooms.rooms.values()][0];
+  rooms.handle(a, { type: 'order', item: 'cigarette' });
+  assert.equal(c.last('state').room.players[0].vice.smoke.kind, 'cigarette');
+  rooms.handle(a, { type: 'order', item: 'cigarette' });
+  assert.match(a.last('error').message, /rauchst doch schon/);
+  rooms.handle(a, { type: 'order', item: 'putout' });
+  assert.equal(c.last('state').room.players[0].vice.smoke, null);
+  assert.equal(c.last('state').room.players[0].vice.butts, 1);
+  rooms.handle(a, { type: 'order', item: 'cigar' });
+  assert.match(a.last('error').message, /mindestens 4 Stichen/);
+
+  // Runde mit Ansagen 4/4 (verdient), 3/3 (zu wenig) und 5/4 (falsch)
+  rooms.handle(a, { type: 'start' });
+  room.game.history.push({ bids: [4, 3, 5], tricks: [4, 3, 4] });
+  rooms.awardCigars(room);
+  rooms.awardCigars(room); // nicht doppelt
+  assert.deepEqual(room.players.map((p) => p.vice.cigars), [1, 0, 0]);
+  rooms.handle(a, { type: 'order', item: 'cigar' });
+  const v = c.last('state').room.players[0].vice;
+  assert.equal(v.smoke.kind, 'cigar');
+  assert.equal(v.cigars, 0);
+  // abgebrannt: landet als Kippe im Aschenbecher
+  room.players[0].vice.smoke.at -= 60 * 60 * 1000;
+  rooms.handle(a, { type: 'order', item: 'cigarette' });
+  assert.equal(c.last('state').room.players[0].vice.butts, 2);
+  rooms.close();
+});
+
+test('Theke-Emotes sip und puff werden weitergereicht', () => {
+  const rooms = new Rooms();
+  const { a, b, ids } = table(rooms);
+  rooms.handle(a, { type: 'emote', kind: 'puff' });
+  assert.deepEqual(b.last('emote'), { type: 'emote', id: ids[0], kind: 'puff' });
+  rooms.close();
+});

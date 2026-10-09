@@ -8,6 +8,7 @@ import { backMaterial, cardGeometry } from './cards.js';
 import { mergeStatic } from './merge.js';
 import { loadModel, findBones, rotateWorld, aimBone, partOf } from './models.js';
 import { figureByKey } from '../figures.js';
+import { SeatProps, MUG_REST, ASH_REST, PACK_REST, makeFlame, smoke } from './props.js';
 
 // ---------- Material- und Geometrie-Cache ----------
 const mats = new Map();
@@ -78,9 +79,8 @@ export function archetypeIndex(key) {
 }
 
 const DARK = '#2a1512';
-// Krug je Typ (Holz, Zinn, Ton)
-const MUG = { wizard: '#c9b98a', pirate: '#6b4326', goblin: '#7a5a3a', dwarf: '#8d959e', witch: '#5a4a6a', gentleman: '#d8d2c4', cowboy: '#8a5a32', orc: '#5b4a3b' };
-const MUG_REST = new THREE.Vector3(-0.21, 0.78, 0.66); // auf dem Tisch, rechts vor dem Gast (Stuhl-Koordinaten)
+// Reaktionen mit der rechten Hand an Krug oder Zigarette schließen sich gegenseitig aus
+const HAND_ACTS = new Set(['drink', 'cheers', 'puff', 'light']);
 
 /** Glatter Pfad durch Schlüsselpunkte [[tau, Vector3], …] (tau aufsteigend). */
 function along(tau, keys, out) {
@@ -108,16 +108,12 @@ const _mug = new THREE.Vector3();
 const _hand = new THREE.Vector3();
 const MOUTH = new THREE.Vector3(-0.03, 0.74, 0.2); // Krug am Mund (Körper-Koordinaten)
 const TOAST = new THREE.Vector3(-0.1, 0.98, 0.5); // Krug zum Anstoßen hoch über den Tisch
-
-/** Bierkrug (Boden im Ursprung, Henkel bei +x). */
-export function makeMug(color = '#c9b98a') {
-  const mug = new THREE.Group();
-  part(mug, CYL(8), color, { p: [0, 0.065, 0], s: [0.046, 0.13, 0.046] });
-  part(mug, CYL(8), '#f4ead2', { p: [0, 0.133, 0], s: [0.041, 0.014, 0.041], shadow: false });
-  for (const y of [0.02, 0.11]) part(mug, CYL(8), '#3a2a1a', { p: [0, y, 0], s: [0.048, 0.012, 0.048], shadow: false });
-  part(mug, TORUS(), color, { p: [0.058, 0.068, 0], s: [0.03, 0.036, 0.05] });
-  return mug;
-}
+const MOUTH_CIG = new THREE.Vector3(-0.05, 0.72, 0.25); // Zigarette an den Lippen (Körper-Koordinaten)
+const HOLD_CIG = new THREE.Vector3(-0.2, 0.5, 0.36); // Zigarette locker in der Hand beim Ausatmen
+const _ash = new THREE.Vector3();
+const _pack = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
+const _mq = new THREE.Quaternion();
 
 export class Character {
   constructor(archIndex, seed) {
@@ -145,6 +141,7 @@ export class Character {
     this.mood = 'neutral';
     this.remoteGoal = null; // echter Blick des Spielers (3D-Client), sonst null
     this.nextDrink = 0;
+    this.nextPuff = 0;
 
     this.buildChair();
     this.buildBody(A);
@@ -160,9 +157,16 @@ export class Character {
     this.labelAnchor = new THREE.Object3D();
     this.labelAnchor.position.set(0, this.topY + 0.16, 0);
     this.root.add(this.labelAnchor);
-    this.buildMug(MUG[A.key] ?? '#c9b98a');
     // Unbewegte Teile zusammenfassen (Augenbrauen, Münder und Hände bleiben einzeln)
     mergeStatic(this.root, new Set([...this.brows, ...Object.values(this.mouth), this.left.hand, this.right.hand]));
+    // Theke am Platz: Bier, Bierdeckel, Aschenbecher, Zigarette (erst nach dem Zusammenfassen,
+    // weil sich daran ständig etwas ändert)
+    this.props = new SeatProps();
+    this.root.add(this.props.group);
+    this.mug = this.props.mug;
+    this.flame = makeFlame();
+    this.flame.visible = false;
+    this.root.add(this.flame);
     this.root.traverse((o) => (o.userData.character = this));
   }
 
@@ -380,16 +384,14 @@ export class Character {
     this.topY = 0.5 + 0.55 + 0.07 + hatTop; // Weltkoordinate relativ zum Stuhlboden
   }
 
-  buildMug(color) {
-    const mug = (this.mug = makeMug(color));
-    mug.position.copy(MUG_REST);
-    mug.rotation.y = 2.4; // Henkel zeigt zur rechten Hand
-    this.root.add(mug);
-  }
-
   /** Mittelpunkt des Kopfes in Weltkoordinaten (für Blickkontakt). */
   headWorld(out = new THREE.Vector3()) {
     return this.face.getWorldPosition(out);
+  }
+
+  /** Mund in Weltkoordinaten (hier kommt der Rauch heraus). */
+  mouthWorld(out = new THREE.Vector3()) {
+    return this.face.localToWorld(out.set(0, -this.HR * 0.45, this.HR * 0.95));
   }
 
   buildArm(side) {
@@ -443,15 +445,16 @@ export class Character {
 
   /**
    * Reaktion abspielen: play, bid, win, happy, sad, cheer, trump, wave, shock, drink
-   * sowie die Emotes cheers (Prost), knock (auf den Tisch klopfen), facepalm, laugh.
+   * sowie die Emotes cheers (Prost), knock (auf den Tisch klopfen), facepalm, laugh und von
+   * der Theke puff (Zug an der Zigarette) und light (Zigarette/Zigarre anzünden).
    */
   react(type, t, opts = {}) {
     const dur = {
       play: 0.8, bid: 1.5, win: 1.6, happy: 1.5, sad: 2.2, cheer: 3.6, trump: 1.6, wave: 1.8, shock: 1.1,
-      drink: 2.8, cheers: 3.4, knock: 1.3, facepalm: 1.9, laugh: 2.1,
+      drink: 2.8, cheers: 3.4, knock: 1.3, facepalm: 1.9, laugh: 2.1, puff: 3.8, light: 3.6,
     }[type] ?? 1;
-    // Krug-Reaktionen schließen sich gegenseitig aus
-    if (type === 'drink' || type === 'cheers') this.reactions = this.reactions.filter((r) => r.type !== 'drink' && r.type !== 'cheers');
+    // Krug- und Zigaretten-Reaktionen schließen sich gegenseitig aus
+    if (HAND_ACTS.has(type)) this.reactions = this.reactions.filter((r) => !HAND_ACTS.has(r.type));
     // gleiche Reaktion nicht stapeln
     this.reactions = this.reactions.filter((r) => r.type !== type);
     this.reactions.push({ type, t0: t + (opts.delay ?? 0), dur, target: opts.target?.clone() });
@@ -473,11 +476,22 @@ export class Character {
     const Rh = this.right.target.copy(this.base.right);
     let mugHeld = 0;
     let mugTilt = 0;
-    // Ab und zu einen Schluck nehmen (nicht, wenn gerade etwas anderes passiert)
+    let cigHeld = false;
+    let inhale = 0;
+    let flame = 0;
+    const props = this.props;
+    // Ab und zu einen Schluck nehmen bzw. ziehen (nicht, wenn gerade etwas anderes passiert)
     if (!this.nextDrink) this.nextDrink = t + 6 + Math.random() * 30;
     if (t > this.nextDrink) {
       this.nextDrink = t + 22 + Math.random() * 40;
-      if (!this.turn && !this.reactions.length) this.react('drink', t);
+      if (!this.turn && !this.reactions.length && props.canDrink()) this.react('drink', t);
+    }
+    if (props.isSmoking()) {
+      if (!this.nextPuff) this.nextPuff = t + 5 + Math.random() * 10;
+      if (t > this.nextPuff) {
+        this.nextPuff = t + 14 + Math.random() * 22;
+        if (!this.turn && !this.reactions.length) this.react('puff', t);
+      }
     }
     // Krugplatz in Körper-Koordinaten (Ziel für die rechte Hand)
     this.body.updateWorldMatrix(true, false);
@@ -592,6 +606,33 @@ export class Character {
           lean += 0.05 * e;
           break;
         }
+        case 'puff':
+        case 'light': {
+          // Hand → Aschenbecher (bzw. Schachtel) → Lippen, ziehen → Hand runter, ausatmen → zurück
+          if (!props.isSmoking()) break;
+          const fromPack = rx.type === 'light' && props.smoking.kind === 'cigarette';
+          const pick = this.body.worldToLocal(this.root.localToWorld(fromPack ? _pack.copy(PACK_REST).setY(PACK_REST.y + 0.05) : _ash.copy(ASH_REST).add(_v2.set(-0.02, 0.045, -0.015))));
+          const ashBody = this.body.worldToLocal(this.root.localToWorld(_ash.copy(ASH_REST).add(_v2.set(-0.02, 0.045, -0.015))));
+          const keys = [[0, this.base.right], [0.16, pick], [0.34, MOUTH_CIG], [0.58, MOUTH_CIG], [0.7, HOLD_CIG], [0.86, HOLD_CIG], [0.95, ashBody], [1, this.base.right]];
+          along(tau, keys, Rh);
+          if (tau >= 0.16 && tau <= 0.95) cigHeld = true;
+          if (tau > 0.34 && tau < 0.58) {
+            inhale = envelope((tau - 0.34) / 0.24, 0.3);
+            headPitch -= 0.06 * inhale;
+            mouth = 'neutral';
+            browTilt -= 0.15 * inhale;
+          }
+          if (rx.type === 'light' && tau > 0.3 && tau < 0.5) flame = envelope((tau - 0.3) / 0.2, 0.15);
+          const out = envelope((tau - 0.6) / 0.32, 0.25);
+          headPitch -= 0.16 * out;
+          if (out > 0.2) mouth = 'open';
+          if (tau > 0.62 && !rx.exhaled) {
+            rx.exhaled = true;
+            this.exhale(props.smoking.kind === 'cigar' ? 1.4 : 1);
+          }
+          lean += 0.04 * e;
+          break;
+        }
         case 'knock': {
           // drei Schläge mit der Faust auf den Tisch (bei 0,35 / 0,55 / 0,75 s)
           const s = tau * rx.dur;
@@ -637,9 +678,25 @@ export class Character {
     this.solveArm(this.right);
 
     // Krug: auf dem Tisch oder in der rechten Hand
-    if (mugHeld) {
+    if (mugHeld || cigHeld) {
       this.right.hand.updateWorldMatrix(true, false);
       this.root.worldToLocal(this.right.hand.getWorldPosition(_hand));
+    }
+    // Zigarette: in der Hand (Glut nach vorn) oder im Aschenbecher (macht props.update)
+    props.held = cigHeld && props.isSmoking();
+    props.glow = inhale;
+    if (props.held) {
+      props.stick.position.set(_hand.x - 0.01, _hand.y + 0.01, _hand.z + 0.02);
+      props.stick.rotation.set(0, -Math.PI / 2 + 0.35, -0.12 - inhale * 0.1);
+    }
+    this.flame.visible = flame > 0.05 && props.held;
+    if (this.flame.visible) {
+      props.stick.updateMatrixWorld(true);
+      this.root.worldToLocal(props.emberWorld(this.flame.position));
+      this.flame.position.y -= 0.03;
+      this.flame.scale.setScalar(flame * (0.9 + Math.sin(t * 40) * 0.1));
+    }
+    if (mugHeld) {
       this.mug.position.set(_hand.x - 0.035, _hand.y - 0.065, _hand.z);
       this.mug.rotation.set(-mugTilt, 2.4, 0);
     } else {
@@ -691,6 +748,15 @@ export class Character {
       br.rotation.z = br.userData.sx * browTilt * 0.5;
     }
     this.setMouth(mouth);
+  }
+
+  /** Rauch ausatmen: aus dem Mund nach vorn und etwas nach oben. */
+  exhale(amount = 1) {
+    this.root.updateMatrixWorld(true);
+    const m = this.mouthWorld(new THREE.Vector3());
+    this.root.getWorldQuaternion(_mq);
+    _fwd.set(0, 0.35, 1).applyQuaternion(_mq);
+    smoke.exhale(m, _fwd, { amount });
   }
 
   /** Zwei-Knochen-IK: Hand an arm.target (im Körper-Raum), Ellbogen Richtung arm.pole. */
@@ -822,6 +888,13 @@ export class ModelCharacter extends Character {
   headWorld(out = new THREE.Vector3()) {
     if (!this.rig) return super.headWorld(out);
     return this.rig.bones.head.getWorldPosition(out).add(_w.set(0, 0.1, 0));
+  }
+
+  mouthWorld(out = new THREE.Vector3()) {
+    if (!this.rig) return super.mouthWorld(out);
+    this.rig.bones.head.getWorldPosition(out);
+    this.head.getWorldQuaternion(_mq);
+    return out.add(_w.set(0, 0.04, 0.11).applyQuaternion(_mq));
   }
 
   update(t, dt) {

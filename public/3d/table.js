@@ -3,7 +3,11 @@
 
 import * as THREE from 'three';
 import { makeCard, setCardFace, CARD_ASPECT, backMesh, handTint } from './cards.js';
-import { makeCharacter, flat, makeMug } from './characters.js';
+import { makeCharacter, flat } from './characters.js';
+import { SeatProps, makeBeer, setBeerLevel, makeFlame, smoke } from './props.js';
+import { Waiter } from './waiter.js';
+import { HAND_LAYER } from './post.js';
+import { VICE } from '../vices.js';
 import { assignFigures } from '../figures.js';
 import { TABLE, seatAngle, seatPos, trickSpot, pileSpot, ringSpot, deckSpot, tangent } from './layout.js';
 import { tween, after, cancel, cancelGroup, now, hashStr, clamp, smooth, easeOut, easeInOut } from './util.js';
@@ -39,6 +43,9 @@ const _fx = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
 const Y = new THREE.Vector3(0, 1, 0);
+
+/** Uhr für die Theke in echten Sekunden (die Server-Zeiten sind echte Millisekunden). */
+const vnow = () => performance.now() / 1000;
 
 /** 0 → 1 → 0 über die Zeit s (Sekunden): weich hoch bis `rise`, weich wieder runter bis `end`. */
 function envelopeT(s, rise, end) {
@@ -153,6 +160,16 @@ export class TableView {
     this.scene.add(this.deck);
     this.deckCount = 0;
     this.trumpObj = null;
+
+    // Theke: Wirt, Rauch und meine eigenen Sachen am Platz (meine Figur gibt es im Spiel nicht)
+    this.waiter = new Waiter();
+    this.scene.add(this.waiter.root);
+    this.scene.add(smoke.points);
+    this.myAnchor = new THREE.Group();
+    this.myProps = new SeatProps();
+    this.myAnchor.add(this.myProps.group);
+    this.scene.add(this.myAnchor);
+    this.selfPuffs = [];
   }
 
   angle(seat) {
@@ -206,6 +223,11 @@ export class TableView {
       }
     }
     if (changed) this.fitKey = '';
+    // Meine Sachen liegen an meinem Platz (etwas weiter zur Tischmitte, damit man sie sieht)
+    const myPos = seatPos(0);
+    this.myAnchor.position.copy(myPos).setZ(myPos.z - 0.08);
+    this.myAnchor.rotation.y = Math.PI;
+    this.myAnchor.visible = !this.myChar;
   }
 
   charAt(seat) {
@@ -223,8 +245,87 @@ export class TableView {
 
   remoteEmote(id, kind) {
     const c = this.charById?.get(id);
-    c?.react(kind, now());
+    c?.react(kind === 'sip' ? 'drink' : kind, now());
     return !!c;
+  }
+
+  // ---------- Theke ----------
+  /** Requisiten eines Spielers (meine: am eigenen Platz bzw. an der Figur in der Lobby). */
+  propsOf(id) {
+    if (id === this.myId) return this.myChar?.props ?? this.myProps;
+    return this.charById?.get(id)?.props ?? null;
+  }
+
+  myVice() {
+    return this.propsOf(this.myId);
+  }
+
+  /** Bestellungen aus dem Serverzustand übernehmen: neu Bestelltes bringt der Wirt bzw. wird angezündet. */
+  syncVices(players) {
+    for (const p of players) {
+      const props = this.propsOf(p.id);
+      if (!props || !p.vice) continue;
+      const char = p.id === this.myId ? this.myChar : this.charById.get(p.id);
+      this.applyVice(props, p.vice, char, p.id === this.myId);
+    }
+  }
+
+  applyVice(props, vice, char, isMe) {
+    const vt = vnow();
+    const first = !props.synced;
+    props.synced = true;
+    const beer = vice.beer;
+    if (beer && props.beerN !== beer.n) {
+      props.beerN = beer.n;
+      if (first || beer.age > VICE.serveMs) props.serveBeer(beer.n, vt - beer.age / 1000 + 7);
+      else {
+        this.waiter.enqueue({
+          target: props.group,
+          item: 'beer',
+          onArrive: () => {
+            props.serveBeer(beer.n, vnow());
+            this.hooks.sound('clink');
+          },
+        });
+      }
+    }
+    const sm = vice.smoke;
+    if (sm) {
+      const at = vt - sm.age / 1000;
+      const known = props.smokeOrder?.kind === sm.kind && Math.abs(props.smokeOrder.at - at) < 4;
+      if (!known) {
+        props.smokeOrder = { kind: sm.kind, at };
+        const fresh = !first && sm.age < 5000;
+        const lightUp = () => {
+          props.light(sm.kind, vnow());
+          if (char) char.react('light', now());
+          else if (isMe) this.selfEmote('light');
+          if (char || isMe) this.hooks.sound('lighter');
+        };
+        if (!fresh) props.light(sm.kind, at + (sm.kind === 'cigar' ? 7 : 0));
+        else if (sm.kind === 'cigarette') lightUp();
+        else this.waiter.enqueue({ target: props.group, item: 'cigar', onArrive: lightUp });
+      }
+    } else if (props.smokeOrder) {
+      props.smokeOrder = null;
+      if (props.isSmoking()) props.putOut();
+    }
+    props.setButts(Math.max(vice.butts, props.buttCount));
+  }
+
+  /** Klick auf mein Bier oder meinen Aschenbecher (Ego-Perspektive): 'beer' | 'smoke' | null. */
+  pickProp(ndc) {
+    if (!this.egoActive() || !this.myAnchor.visible) return null;
+    const p = this.myProps;
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const objs = [p.mug, p.coaster, p.ashtray, p.pack, p.stick].filter((o) => o?.visible && o.parent);
+    const hit = this.raycaster.intersectObjects(objs, true)[0];
+    if (!hit) return null;
+    for (let o = hit.object; o; o = o.parent) {
+      if (o === p.mug || o === p.coaster) return 'beer';
+      if (o === p.ashtray || o === p.pack || o === p.stick) return 'smoke';
+    }
+    return null;
   }
 
   /**
@@ -233,16 +334,84 @@ export class TableView {
    */
   selfEmote(kind) {
     const t = now();
-    this.myChar?.react(kind, t); // in der Lobby sieht man die eigene Figur
+    this.myChar?.react(kind === 'sip' ? 'drink' : kind, t); // in der Lobby sieht man die eigene Figur
+    this.endSelfFx();
     this.selfFx = { kind, t0: t };
-    if (kind === 'cheers' && this.egoActive()) {
+    const props = this.myProps;
+    if ((kind === 'cheers' || kind === 'sip') && this.egoActive()) {
       if (!this.myMug) {
-        this.myMug = makeMug('#7a4a26');
+        this.myMug = makeBeer();
         this.myMug.traverse((o) => (o.castShadow = false));
         this.camera.add(this.myMug);
       }
       this.myMug.visible = true;
+      setBeerLevel(this.myMug, props.beer ? props.level : 0);
+      props.mug.visible = false;
     }
+    if ((kind === 'puff' || kind === 'light') && this.egoActive() && props.stick) {
+      // Zigarette von der Kamera aus zum Mund führen
+      this.camera.add(props.stick);
+      props.held = true;
+      this.selfFx.stick = props.stick;
+      if (kind === 'light') {
+        this.myFlame ??= makeFlame();
+        this.camera.add(this.myFlame);
+      }
+    }
+  }
+
+  /** Laufenden Ich-Effekt aufräumen (Krug und Zigarette zurück an den Platz). */
+  endSelfFx() {
+    const fx = this.selfFx;
+    if (!fx) return;
+    const props = this.myProps;
+    if (this.myMug) this.myMug.visible = false;
+    if (props.beer) props.mug.visible = true;
+    if (fx.stick) {
+      if (props.stick === fx.stick) props.group.add(fx.stick);
+      props.held = false;
+      props.glow = 0;
+    }
+    if (this.myFlame) this.myFlame.visible = false;
+    this.selfFx = null;
+  }
+
+  /** Rauchwolke direkt vor meinem Gesicht (Ego-Perspektive). */
+  selfExhale(amount = 1) {
+    const map = smoke.mat.uniforms.map.value;
+    const dir = this.camera.getWorldDirection(new THREE.Vector3());
+    for (let i = 0; i < 6; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map, color: '#b8a690', transparent: true, opacity: 0, depthWrite: false }));
+      sp.position.copy(this.camera.localToWorld(new THREE.Vector3((Math.random() - 0.5) * 0.04, -0.09, -0.22)));
+      sp.renderOrder = 9;
+      sp.material.rotation = Math.random() * 6;
+      sp.userData = {
+        t0: now() + i * 0.08,
+        vel: dir.clone().multiplyScalar(0.32 + Math.random() * 0.15).add(new THREE.Vector3((Math.random() - 0.5) * 0.12, 0.06 + Math.random() * 0.06, (Math.random() - 0.5) * 0.12)),
+        amount,
+      };
+      this.scene.add(sp);
+      this.selfPuffs.push(sp);
+    }
+  }
+
+  updateSelfPuffs(t, dt) {
+    this.selfPuffs = this.selfPuffs.filter((sp) => {
+      const u = (t - sp.userData.t0) / 3.2;
+      if (u >= 1) {
+        this.scene.remove(sp);
+        sp.material.dispose();
+        return false;
+      }
+      if (u < 0) return true;
+      sp.position.addScaledVector(sp.userData.vel, dt);
+      sp.userData.vel.multiplyScalar(Math.exp(-dt * 1.2));
+      sp.userData.vel.y += 0.05 * dt;
+      sp.scale.setScalar((0.08 + Math.sqrt(u) * 0.5) * sp.userData.amount);
+      sp.material.opacity = 0.16 * Math.min(1, u * 10) * (1 - u) ** 2;
+      sp.material.rotation += dt * 0.3;
+      return true;
+    });
   }
 
   /** Kamera-Versatz und eigener Krug für selfEmote (wird in updateCamera addiert). */
@@ -267,6 +436,48 @@ export class TableView {
     } else if (fx.kind === 'cheer') {
       out.y += Math.abs(Math.sin(s * 9)) * 0.03 * envelopeT(s, 0.1, 1.2);
       if (s > 1.3) this.selfFx = null;
+    } else if (fx.kind === 'sip') {
+      const m = this.myMug;
+      if (m?.visible) {
+        const up = envelopeT(s, 0.4, 2.1);
+        const drink = envelopeT(s - 0.5, 0.3, 1.1);
+        m.scale.setScalar(0.85);
+        m.position.set(0.3 - 0.2 * drink, -0.62 + 0.4 * up + 0.06 * drink, -0.95 + 0.4 * drink);
+        m.rotation.set(0.25 + 1.15 * drink, -0.6, -0.12);
+        setBeerLevel(m, this.myProps.level);
+        pitch += 0.1 * drink;
+      }
+      if (s > 2.2 || !m?.visible) this.endSelfFx();
+    } else if (fx.kind === 'puff' || fx.kind === 'light') {
+      const st = fx.stick;
+      if (!st || st.parent !== this.camera) {
+        this.endSelfFx();
+        return pitch;
+      }
+      const light = fx.kind === 'light';
+      const up = envelopeT(s, 0.45, light ? 2.6 : 2.3);
+      const inhale = envelopeT(s - (light ? 0.7 : 0.5), 0.25, 1.0);
+      st.position.set(0.24 - 0.2 * up, -0.5 + 0.39 * up, -0.58 + 0.28 * up);
+      st.rotation.set(0, Math.PI / 2 - 0.4, -0.18 - 0.1 * up);
+      this.myProps.glow = inhale;
+      pitch += 0.05 * inhale;
+      if (this.myFlame) {
+        const f = light ? envelopeT(s - 0.45, 0.12, 0.7) : 0;
+        this.myFlame.visible = f > 0.05;
+        if (this.myFlame.visible) {
+          st.updateMatrixWorld(true);
+          this.camera.worldToLocal(st.userData.ember.getWorldPosition(this.myFlame.position));
+          this.myFlame.position.y -= 0.025;
+          this.myFlame.scale.setScalar(f * (0.9 + Math.sin(t * 40) * 0.1));
+        }
+      }
+      const exhaleAt = light ? 1.9 : 1.6;
+      if (s > exhaleAt && !fx.exhaled) {
+        fx.exhaled = true;
+        this.selfExhale(this.myProps.smoking?.kind === 'cigar' ? 1.4 : 1);
+      }
+      pitch -= 0.08 * envelopeT(s - exhaleAt, 0.3, 1.0);
+      if (s > (light ? 2.7 : 2.4)) this.endSelfFx();
     } else if (fx.kind === 'cheers') {
       const m = this.myMug;
       if (m) {
@@ -278,10 +489,7 @@ export class TableView {
         m.position.set(0.3 - 0.18 * drink, -0.62 + 0.4 * up + 0.08 * toast + 0.04 * drink, -0.95 - 0.2 * toast + 0.33 * drink);
         m.rotation.set(0.25 - 0.3 * toast + 1.1 * drink, -0.6, -0.12 + Math.sin(s * 22) * 0.05 * toast);
         pitch += 0.1 * drink;
-        if (s > 2.5) {
-          m.visible = false;
-          this.selfFx = null;
-        }
+        if (s > 2.5) this.endSelfFx();
       } else this.selfFx = null;
     } else this.selfFx = null;
     return pitch;
@@ -338,6 +546,15 @@ export class TableView {
     const demo = ['me', 'Stammgast-Alrik', 'Stammgast-Hedda', 'Stammgast-Bruno', 'Stammgast-Zora'].map((id) => ({ id }));
     this.setSeating(demo, 0);
     this.seatChars.forEach((c, i) => c?.setCardCount(3 + i));
+    // Die Stammgäste haben schon ein paar Bier und rauchen
+    const vt = vnow();
+    this.seatChars.forEach((c, i) => {
+      if (!c || c.props.synced) return;
+      c.props.synced = true;
+      c.props.serveBeer(2 + i * 2, vt - 20 - i * 35);
+      if (i % 2) c.props.light(i === 3 ? 'cigar' : 'cigarette', vt - 15 - i * 10);
+      c.props.setButts(i + 1);
+    });
     this.mode = 'orbit';
   }
 
@@ -371,11 +588,16 @@ export class TableView {
 
   sync(state) {
     const g = state.game;
-    if (!g) return this.showLobby(state.room, state.me);
+    if (!g) {
+      this.showLobby(state.room, state.me);
+      this.syncVices(state.room.players);
+      return;
+    }
     this.mode = 'seat';
     // gewählte Figuren stehen nur in der Spielerliste des Raums
     const chosen = new Map(state.room.players.map((p) => [p.id, p.character]));
     this.setSeating(g.seats.map((s) => ({ id: s.id, character: chosen.get(s.id) ?? null })), g.mySeat);
+    this.syncVices(state.room.players);
     const prev = this.g;
     this.g = g;
     const key = `${g.round}|${g.maxRounds}|${g.seats.map((s) => s.id).join(',')}`;
@@ -647,6 +869,7 @@ export class TableView {
       this.hand.delete(card.id);
       if (this.hovered === card.id) this.hovered = null;
       this.roundRoot.attach(obj);
+      obj.traverse((o) => o.layers.set(0));
       setCardFace(obj, card, 'world');
       for (const m of [obj.userData.front, obj.userData.back]) m.renderOrder = 0;
       this.layoutHand();
@@ -786,6 +1009,7 @@ export class TableView {
 
   addHandCard(card) {
     const obj = makeCard(card, 'hand');
+    obj.traverse((o) => o.layers.set(HAND_LAYER)); // Handkarten ohne Nachbearbeitung zeichnen (post.js)
     const hit = new THREE.Mesh(obj.userData.front.geometry, new THREE.MeshBasicMaterial({ visible: false }));
     hit.userData.cardId = card.id;
     const ch = this.handLayout.ch;
@@ -1151,6 +1375,13 @@ export class TableView {
       c.camPos.copy(this.camera.position);
       c.update(t, dt);
     });
+    // Theke: Füllstand, Glut, Rauch, Wirt
+    const vt = vnow();
+    for (const c of this.seatChars) c?.props.update(vt, dt);
+    if (this.myAnchor.visible) this.myProps.update(vt, dt);
+    this.waiter.update(t, dt);
+    smoke.update(dt, this.camera, this.world.renderer.domElement.height);
+    this.updateSelfPuffs(t, dt);
     // Leuchtring (in der Ego-Perspektive nicht vor mir selbst – den sähe man nur riesig von oben)
     this.ring.visible = !!this.ringActive && !(this.egoBlend > 0.5 && g?.turn === this.mySeat);
     if (this.ring.visible) {

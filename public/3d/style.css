@@ -35,6 +35,9 @@ a { color: var(--gold); }
 /* ---------- Szene ---------- */
 .stage { position: fixed; inset: 0; }
 .stage canvas { display: block; width: 100%; height: 100%; }
+/* Vignette und Filmkorn macht die Nachbearbeitung (post.js); nur bei ?nofx per CSS */
+.vignette { display: none; }
+body.nofx .vignette { display: block; }
 .vignette {
   position: fixed; inset: 0; pointer-events: none;
   background:
@@ -42,21 +45,6 @@ a { color: var(--gold); }
     linear-gradient(180deg, rgba(10, 5, 2, 0.35), transparent 18%, transparent 80%, rgba(10, 5, 2, 0.4));
 }
 .labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
-/* Filmkorn über der Szene (Rauschbild wird in main.js erzeugt); bewegt nur per transform */
-.grain {
-  position: fixed; inset: -60px; pointer-events: none; opacity: 0.07;
-  background-image: var(--grain); background-size: 256px 256px;
-  animation: grain 0.6s steps(6) infinite;
-}
-@keyframes grain {
-  0% { transform: translate(0, 0); }
-  17% { transform: translate(-31px, 17px); }
-  33% { transform: translate(23px, -41px); }
-  50% { transform: translate(-47px, -13px); }
-  67% { transform: translate(41px, 29px); }
-  83% { transform: translate(-11px, 47px); }
-  100% { transform: translate(0, 0); }
-}
 body[data-view="ego"] .vignette {
   background:
     radial-gradient(ellipse 80% 75% at 50% 45%, transparent 50%, rgba(8, 3, 1, 0.7) 100%),
@@ -427,3 +415,15 @@ body[data-screen="lobby"] .my-bubble { bottom: auto; top: 18%; left: 62%; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Theke (Bier, Zigarette, Zigarre) ---------- */
+.bar-toggle[aria-expanded="true"] { border-color: var(--gold); }
+.bar-menu { grid-template-columns: repeat(5, 1fr); right: 14px; }
+.bar-btn { min-width: 92px; }
+.bar-btn .sub { font-size: 0.66rem; color: var(--muted); opacity: 0.85; white-space: nowrap; }
+.bar-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.bar-btn:disabled:hover { background: rgba(255, 240, 210, 0.07); }
+.bar-btn.locked .emoji { filter: grayscale(1); }
+.bar-row { margin-top: -0.6rem; }
+.emote-row.bar-row .bar-btn .sub { display: none; }
+.emote-row.bar-row .bar-btn:disabled:hover { background: #efe5cd; }

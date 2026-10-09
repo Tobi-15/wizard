@@ -3,9 +3,11 @@
 
 import * as THREE from 'three';
 import { flat } from './characters.js';
-import { TABLE } from './layout.js';
+import { TABLE, BAR } from './layout.js';
 import { rng, clamp } from './util.js';
 import { mergeStatic } from './merge.js';
+import { createPost } from './post.js';
+import { makeBeer } from './props.js';
 
 const R = rng(1234);
 
@@ -72,6 +74,86 @@ function softBlob(ctx, w, h) {
   }
 }
 
+/** Schmutz: dunkle Flecken, Wasserläufe von oben, Ruß unter der Decke. */
+function grime(ctx, w, h, { stains = 18, streaks = 30, soot = 0.35 } = {}) {
+  for (let i = 0; i < stains; i++) {
+    const x = R() * w;
+    const y = R() * h;
+    const r = 20 + R() * 90;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(30,18,8,${0.1 + R() * 0.18})`);
+    g.addColorStop(1, 'rgba(30,18,8,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+  for (let i = 0; i < streaks; i++) {
+    const x = R() * w;
+    const len = h * (0.15 + R() * 0.5);
+    const g = ctx.createLinearGradient(0, 0, 0, len);
+    g.addColorStop(0, `rgba(25,15,6,${0.08 + R() * 0.12})`);
+    g.addColorStop(1, 'rgba(25,15,6,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x, 0, 1 + R() * 3, len);
+  }
+  const g = ctx.createLinearGradient(0, 0, 0, h * 0.5);
+  g.addColorStop(0, `rgba(10,6,3,${soot})`);
+  g.addColorStop(1, 'rgba(10,6,3,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+}
+
+/** Bierränder und Brandflecken (Tischplatte, Filz). */
+function rings(ctx, w, h, n, { burns = 0 } = {}) {
+  for (let i = 0; i < n; i++) {
+    const x = w * (0.1 + R() * 0.8);
+    const y = h * (0.1 + R() * 0.8);
+    const r = w * (0.03 + R() * 0.012);
+    ctx.strokeStyle = `rgba(40,22,8,${0.18 + R() * 0.2})`;
+    ctx.lineWidth = 2 + R() * 3;
+    ctx.beginPath();
+    ctx.arc(x, y, r, R() * 6, R() * 6 + 3.5 + R() * 2.8);
+    ctx.stroke();
+  }
+  for (let i = 0; i < burns; i++) {
+    const x = w * (0.15 + R() * 0.7);
+    const y = h * (0.15 + R() * 0.7);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(R() * Math.PI);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 14);
+    g.addColorStop(0, 'rgba(15,8,2,0.75)');
+    g.addColorStop(1, 'rgba(15,8,2,0)');
+    ctx.fillStyle = g;
+    ctx.scale(2.4, 0.7);
+    ctx.fillRect(-14, -14, 28, 28);
+    ctx.restore();
+  }
+}
+
+/** Leuchtschrift wie aus Neonröhren (bunter Schein, heller Kern) auf transparentem Grund. */
+function neonTexture(w, h, draw) {
+  return canvasTex(w, h, (ctx) => {
+    ctx.lineCap = ctx.lineJoin = 'round';
+    for (const [lw, a, white] of [[18, 0.18, false], [10, 0.5, false], [5, 1, false], [2, 1, true]]) {
+      ctx.save();
+      ctx.globalAlpha = a;
+      draw(ctx, lw, white);
+      ctx.restore();
+    }
+  });
+}
+
+const bottleMats = new Map();
+function bottleMat(c) {
+  if (!bottleMats.has(c)) {
+    bottleMats.set(c, new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.18, roughness: 0.12, metalness: 0.1 }));
+  }
+  return bottleMats.get(c);
+}
+
+/** Heller Farbwert über 1 (leuchtet mit Bloom). */
+const hdr = (c, k) => new THREE.Color(c).multiplyScalar(k);
+
 // ---------- Welt ----------
 export function createWorld(container) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -80,26 +162,26 @@ export function createWorld(container) {
   renderer.setSize(innerWidth, innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.15;
+  renderer.toneMappingExposure = 1.12;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.append(renderer.domElement);
 
   const scene = new THREE.Scene();
-  const fogColor = new THREE.Color('#1a0f09');
+  const fogColor = new THREE.Color('#140c08');
   scene.background = fogColor;
-  scene.fog = new THREE.Fog(fogColor, 6.5, 15);
+  scene.fog = new THREE.Fog(fogColor, 5.5, 14);
 
   const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 40);
   camera.position.set(0, 2.6, 4.6);
   scene.add(camera);
 
   // ---------- Licht ----------
-  const hemi = new THREE.HemisphereLight('#ffcf9a', '#2a160a', 0.65);
+  const hemi = new THREE.HemisphereLight('#ffcf9a', '#22120a', 0.42);
   scene.add(hemi);
 
   const lampY = 2.55;
-  const spot = new THREE.SpotLight('#ffc27a', 26, 0, 0.98, 0.62, 2);
+  const spot = new THREE.SpotLight('#ffc47e', 32, 0, 0.95, 0.55, 2);
   spot.position.set(0, lampY - 0.05, 0);
   spot.target.position.set(0, TABLE.y, 0);
   spot.castShadow = true;
@@ -114,8 +196,12 @@ export function createWorld(container) {
   fireLight.position.set(-5.2, 0.8, -1.6);
   scene.add(fireLight);
 
-  const barLight = new THREE.PointLight('#ffa850', 3.2, 6, 1.8);
-  barLight.position.set(3.0, 2.2, -4.3);
+  // Neonschein über der Theke (rosa) und am Bier-Schild (rot)
+  const barLight = new THREE.PointLight('#ff6f8a', 4.2, 6.5, 1.6);
+  barLight.position.set(BAR.x, 2.7, -4.9);
+  const neonLight = new THREE.PointLight('#ff2a1a', 3.2, 4.5, 1.7);
+  neonLight.position.set(-4.3, 2.2, -5.0);
+  scene.add(neonLight);
   scene.add(barLight);
 
   const moon = new THREE.DirectionalLight('#7f98ff', 0.35);
@@ -123,7 +209,7 @@ export function createWorld(container) {
   scene.add(moon);
 
   // Weiches Fülllicht von vorne (aus Richtung der Kamera), damit die Gesichter lesbar sind
-  const fill = new THREE.DirectionalLight('#ffd2a0', 0.95);
+  const fill = new THREE.DirectionalLight('#ffd2a0', 0.8);
   fill.position.set(0, 3.2, 6);
   fill.target.position.set(0, 1, -1);
   scene.add(fill, fill.target);
@@ -136,7 +222,11 @@ export function createWorld(container) {
   const RZF = 9.5;
   const RH = 3.7;
 
-  const floorTex = canvasTex(1024, 1024, (ctx, w, h) => planks(ctx, w, h, { n: 10, base: [92, 60, 36], vary: 0.18 }), { repeat: [3, 3] });
+  const floorTex = canvasTex(1024, 1024, (ctx, w, h) => {
+    planks(ctx, w, h, { n: 10, base: [78, 50, 30], vary: 0.2 });
+    grime(ctx, w, h, { stains: 26, streaks: 0, soot: 0 });
+    rings(ctx, w, h, 6, { burns: 10 });
+  }, { repeat: [3, 3] });
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(RX * 2, RZF - RZB), new THREE.MeshLambertMaterial({ map: floorTex }));
   floor.rotation.x = -Math.PI / 2;
   floor.position.z = (RZF + RZB) / 2;
@@ -185,13 +275,15 @@ export function createWorld(container) {
       ctx.fillRect(0, 0, w, h);
     }
     noise(ctx, w, h, 9000, 0.1);
+    grime(ctx, w, h);
   }, { repeat: [3, 1] });
   const panelTex = canvasTex(512, 256, (ctx, w, h) => {
     ctx.save();
     ctx.translate(w, 0);
     ctx.rotate(Math.PI / 2);
-    planks(ctx, h, w, { n: 12, base: [70, 42, 24], vary: 0.12 });
+    planks(ctx, h, w, { n: 12, base: [62, 37, 21], vary: 0.14 });
     ctx.restore();
+    grime(ctx, w, h, { stains: 10, streaks: 0, soot: 0 });
   }, { repeat: [4, 1] });
   const plasterMat = new THREE.MeshLambertMaterial({ map: plasterTex });
   const panelMat = new THREE.MeshLambertMaterial({ map: panelTex });
@@ -253,10 +345,10 @@ export function createWorld(container) {
   const win = new THREE.Group();
   win.position.set(-0.75 - (RZF + RZB) / 2, 1.95, 0.02); // Welt-z ≈ -0.75
   rightWall.add(win);
-  const glassMat = new THREE.MeshBasicMaterial({ color: '#3d5da8', fog: false });
+  const glassMat = new THREE.MeshBasicMaterial({ color: '#2f4d96', fog: false });
   const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.2), glassMat);
   win.add(glass);
-  const moonDisc = new THREE.Mesh(new THREE.CircleGeometry(0.11, 12), new THREE.MeshBasicMaterial({ color: '#f4f0d8', fog: false }));
+  const moonDisc = new THREE.Mesh(new THREE.CircleGeometry(0.11, 16), new THREE.MeshBasicMaterial({ color: hdr('#f4f0d8', 2.5), fog: false }));
   moonDisc.position.set(0.22, 0.25, 0.005);
   win.add(moonDisc);
   for (const [w, h, x, y] of [[1.26, 0.1, 0, 0.65], [1.26, 0.1, 0, -0.65], [0.1, 1.4, 0.58, 0], [0.1, 1.4, -0.58, 0], [1.1, 0.06, 0, 0], [0.06, 1.2, 0, 0]]) {
@@ -302,7 +394,7 @@ export function createWorld(container) {
     const hot = i % 3 === 0;
     const f = new THREE.Mesh(
       new THREE.ConeGeometry(0.06 + R() * 0.05, 0.3 + R() * 0.25, 5),
-      new THREE.MeshBasicMaterial({ color: hot ? '#ffd27a' : '#ff7a26', transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ color: hdr(hot ? '#ffd27a' : '#ff7a26', 2.2), transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }),
     );
     f.position.set(-0.24 + (i / 6) * 0.48, 0.25, 0.02 + (hot ? 0.05 : 0));
     f.userData.base = f.position.y;
@@ -313,37 +405,51 @@ export function createWorld(container) {
 
   // Theke hinten rechts mit Flaschenregal
   const bar = new THREE.Group();
-  bar.position.set(2.9, 0, RZB + 0.95);
+  bar.position.set(BAR.x, 0, BAR.z);
   room.add(bar);
   const counter = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.05, 0.62), new THREE.MeshLambertMaterial({ map: panelTex }));
   counter.position.y = 0.525;
   counter.castShadow = counter.receiveShadow = true;
   bar.add(counter);
-  const counterTop = new THREE.Mesh(new THREE.BoxGeometry(3.55, 0.07, 0.78), flat('#3b2414'));
+  const counterTop = new THREE.Mesh(new THREE.BoxGeometry(3.55, 0.07, 0.78), new THREE.MeshStandardMaterial({ color: '#3b2414', roughness: 0.28 }));
   counterTop.position.y = 1.08;
   counterTop.receiveShadow = true;
   bar.add(counterTop);
   const bottleColors = ['#2e6b3a', '#6b3a12', '#a8721e', '#2a4a7a', '#7a1f2a', '#c9b98a'];
   for (const sy of [1.55, 2.15]) {
     const shelf = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.05, 0.3), flat('#3b2414'));
-    shelf.position.set(0, sy, -0.75);
+    shelf.position.set(0, sy, -1.05);
     bar.add(shelf);
     for (let i = 0; i < 13; i++) {
       const c = bottleColors[Math.floor(R() * bottleColors.length)];
-      const m = flat(c, { emissive: c, emissiveIntensity: 0.35 });
+      const m = bottleMat(c);
       const h = 0.22 + R() * 0.12;
       const bt = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, h, 6), m);
-      bt.position.set(-1.45 + i * 0.24 + R() * 0.05, sy + h / 2 + 0.025, -0.75);
+      bt.position.set(-1.45 + i * 0.24 + R() * 0.05, sy + h / 2 + 0.025, -1.05);
       const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.03, 0.1, 5), m);
       neck.position.copy(bt.position);
       neck.position.y += h / 2 + 0.05;
       bar.add(bt, neck);
     }
   }
+  // Zapfanlage und ein paar Gläser auf der Theke
+  const chrome = new THREE.MeshStandardMaterial({ color: '#d8d8dc', roughness: 0.18, metalness: 1 });
+  const tapBase = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.32, 0.12), chrome);
+  tapBase.position.set(-0.4, 1.28, -0.12);
+  bar.add(tapBase);
   for (let i = 0; i < 3; i++) {
-    const mug = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.055, 0.14, 7), flat('#c9b98a'));
-    mug.position.set(-1 + i * 0.7 + R() * 0.2, 1.19, 0.05);
-    bar.add(mug);
+    const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.12, 8), chrome);
+    spout.rotation.x = Math.PI / 2;
+    spout.position.set(-0.55 + i * 0.15, 1.3, -0.01);
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.012, 0.2, 8), flat(['#7a1f1f', '#1f3a7a', '#1f1f1f'][i]));
+    handle.position.set(-0.55 + i * 0.15, 1.53, -0.07);
+    bar.add(spout, handle);
+  }
+  for (const [x, z, full] of [[0.55, 0.12, 1], [0.85, 0.05, 0.3], [-1.2, 0.1, 0.7]]) {
+    const b = makeBeer(full);
+    b.position.set(x, 1.115, z);
+    b.rotation.y = R() * 6;
+    bar.add(b);
   }
   for (let i = 0; i < 3; i++) {
     const st = new THREE.Group();
@@ -395,7 +501,7 @@ export function createWorld(container) {
     arm.position.set(0, -0.08, 0.11);
     const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.14, 6), flat('#efe6cf'));
     candle.position.set(0, 0.0, 0.22);
-    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.07, 5), new THREE.MeshBasicMaterial({ color: '#ffd27a' }));
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.07, 5), new THREE.MeshBasicMaterial({ color: hdr('#ffd27a', 3) }));
     flame.position.set(0, 0.11, 0.22);
     g.add(plate, arm, candle, flame);
     room.add(g);
@@ -432,15 +538,284 @@ export function createWorld(container) {
   pic.add(frame, canvasM);
   room.add(pic);
 
+
+  // ---------- Kneipen-Kram: Neon, Kreidetafel, Plakate, Jukebox, Dartscheibe ----------
+  const neons = [];
+  function neon(tex, w, h, pos, rotY, color, k = 2.6) {
+    const m = new THREE.MeshBasicMaterial({ map: tex, color: hdr(color, k), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), m);
+    mesh.position.copy(pos);
+    mesh.rotation.y = rotY;
+    mesh.renderOrder = 5;
+    mesh.userData = { k, color: new THREE.Color(color), ph: R() * 10, flicker: 0 };
+    room.add(mesh);
+    neons.push(mesh);
+    return mesh;
+  }
+  // „Zum Zauberer“ über dem Flaschenregal
+  neon(neonTexture(1024, 256, (ctx, lw, white) => {
+    ctx.strokeStyle = white ? '#fff6fb' : '#ff4f9a';
+    ctx.lineWidth = lw;
+    ctx.font = 'italic 700 132px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.strokeText('Zum Zauberer', 512, 170);
+    ctx.beginPath(); // Stern
+    for (let i = 0; i <= 10; i++) {
+      const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+      const r = i % 2 ? 16 : 40;
+      ctx.lineTo(70 + Math.cos(a) * r, 60 + Math.sin(a) * r);
+    }
+    ctx.stroke();
+  }), 2.5, 0.62, new THREE.Vector3(BAR.x, 2.95, RZB + 0.12), 0, '#ff4f9a');
+  // „BIER“ mit Krug über den Fässern
+  const beerSign = neon(neonTexture(768, 256, (ctx, lw, white) => {
+    ctx.strokeStyle = white ? '#fff3e6' : '#ff3a1c';
+    ctx.lineWidth = lw;
+    ctx.font = '700 150px Georgia, serif';
+    ctx.textAlign = 'left';
+    ctx.strokeText('BIER', 200, 190);
+    ctx.strokeStyle = white ? '#fffbe6' : '#ffb21c';
+    ctx.strokeRect(40, 80, 70, 110);
+    ctx.beginPath();
+    ctx.arc(115, 135, 28, -Math.PI / 2, Math.PI / 2);
+    ctx.stroke();
+  }), 2.1, 0.7, new THREE.Vector3(-4.3, 2.25, RZB + 0.12), 0, '#ff3a1c');
+
+  // Kreidetafel mit der Karte der Theke
+  const chalkTex = canvasTex(512, 640, (ctx, w, h) => {
+    ctx.fillStyle = '#1e2420';
+    ctx.fillRect(0, 0, w, h);
+    for (let i = 0; i < 30; i++) {
+      ctx.fillStyle = `rgba(255,255,255,${0.015 + R() * 0.03})`;
+      ctx.beginPath();
+      ctx.ellipse(R() * w, R() * h, 30 + R() * 90, 10 + R() * 30, R() * 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = '#efeadc';
+    ctx.textAlign = 'center';
+    ctx.font = '700 52px Georgia, serif';
+    ctx.fillText('Theke', w / 2, 78);
+    ctx.fillRect(w / 2 - 110, 96, 220, 3);
+    ctx.textAlign = 'left';
+    const rows = [
+      ['Zauberbräu Hell', '3,80', '#efeadc'],
+      ['Zigarette', '0,50', '#efeadc'],
+      ['Zigarre', '* ', '#f0c95a'],
+    ];
+    ctx.font = '600 34px Georgia, serif';
+    rows.forEach(([a, b, c], i) => {
+      ctx.fillStyle = c;
+      ctx.fillText(a, 40, 175 + i * 64);
+      ctx.textAlign = 'right';
+      ctx.fillText(b, w - 40, 175 + i * 64);
+      ctx.textAlign = 'left';
+    });
+    ctx.fillStyle = '#f0c95a';
+    ctx.font = 'italic 26px Georgia, serif';
+    ctx.fillText('* nur für Ansage-Könige:', 40, 390);
+    ctx.fillText('  mehr als 3 Stiche angesagt', 40, 426);
+    ctx.fillText('  und genau bekommen!', 40, 462);
+    ctx.fillStyle = '#c9d6e8';
+    ctx.font = '600 26px Georgia, serif';
+    ctx.fillText('Kein Anschreiben.', 40, 540);
+    ctx.fillText('Narren zahlen doppelt.', 40, 580);
+    noise(ctx, w, h, 3000, 0.06);
+  });
+  const board = new THREE.Group();
+  board.position.set(-2.55, 1.9, RZB + 0.05);
+  const boardFrame = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.24, 0.05), flat('#4a2e16'));
+  const boardFace = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.12), new THREE.MeshLambertMaterial({ map: chalkTex }));
+  boardFace.position.z = 0.028;
+  board.add(boardFrame, boardFace);
+  room.add(board);
+
+  // Plakate (eigene Entwürfe)
+  function poster(draw, w, h, pos, rotY, tilt = 0) {
+    const tex = canvasTex(256, Math.round((256 * h) / w), (ctx, cw, ch) => {
+      draw(ctx, cw, ch);
+      // vergilbt, mit Knicken und Rand
+      const g = ctx.createRadialGradient(cw / 2, ch / 2, cw * 0.2, cw / 2, ch / 2, cw * 0.8);
+      g.addColorStop(0, 'rgba(120,80,30,0)');
+      g.addColorStop(1, 'rgba(90,55,20,0.45)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.strokeStyle = 'rgba(60,40,20,0.25)';
+      ctx.beginPath();
+      ctx.moveTo(0, ch / 2);
+      ctx.lineTo(cw, ch / 2 + 6);
+      ctx.stroke();
+      noise(ctx, cw, ch, 1500, 0.08);
+    });
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshLambertMaterial({ map: tex }));
+    m.position.copy(pos);
+    m.rotation.set(0, rotY, tilt);
+    room.add(m);
+  }
+  const center = (ctx, text, y, font, color) => {
+    ctx.font = font;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.fillText(text, 128, y);
+  };
+  poster((ctx, w, h) => {
+    ctx.fillStyle = '#e8d6ad';
+    ctx.fillRect(0, 0, w, h);
+    center(ctx, 'GESUCHT', 48, '700 40px Georgia, serif', '#3a1d0e');
+    ctx.fillStyle = '#3a1d0e';
+    ctx.beginPath(); // Narrenkappe
+    ctx.moveTo(60, 190);
+    ctx.quadraticCurveTo(70, 90, 128, 80);
+    ctx.quadraticCurveTo(186, 90, 196, 190);
+    ctx.fill();
+    for (const [x, y] of [[60, 190], [128, 78], [196, 190]]) {
+      ctx.beginPath();
+      ctx.arc(x, y, 12, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    center(ctx, 'Der Narr', 240, 'italic 700 30px Georgia, serif', '#3a1d0e');
+    center(ctx, 'verliert jeden Stich', 272, '20px Georgia, serif', '#3a1d0e');
+    center(ctx, 'Belohnung: 1 Bier', 320, '700 22px Georgia, serif', '#7a1f1f');
+  }, 0.62, 0.86, new THREE.Vector3(-RX + 0.03, 1.85, 3.6), Math.PI / 2, 0.03);
+  poster((ctx, w, h) => {
+    ctx.fillStyle = '#7a1f1f';
+    ctx.fillRect(0, 0, w, h);
+    center(ctx, 'ZAUBERBRÄU', 60, '700 32px Georgia, serif', '#f2d48a');
+    ctx.fillStyle = '#f2b13a';
+    ctx.fillRect(88, 90, 80, 130);
+    ctx.fillStyle = '#fff6e0';
+    ctx.fillRect(84, 80, 88, 22);
+    ctx.strokeStyle = '#f2d48a';
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.arc(170, 150, 26, -Math.PI / 2, Math.PI / 2);
+    ctx.stroke();
+    center(ctx, 'Hell wie ein Trumpf.', 270, 'italic 24px Georgia, serif', '#f2d48a');
+  }, 0.6, 0.8, new THREE.Vector3(-RX + 0.03, 1.75, 0.6), Math.PI / 2, -0.02);
+  poster((ctx, w, h) => {
+    ctx.fillStyle = '#1f2a3a';
+    ctx.fillRect(0, 0, w, h);
+    center(ctx, 'GROSSES', 50, '700 30px Georgia, serif', '#e9c46a');
+    center(ctx, 'WIZARD', 92, '700 44px Georgia, serif', '#e9c46a');
+    center(ctx, 'TURNIER', 132, '700 30px Georgia, serif', '#e9c46a');
+    center(ctx, 'Freitag · 20 Uhr', 190, '24px Georgia, serif', '#f6eedc');
+    center(ctx, 'Startgeld: ein Narr', 226, 'italic 20px Georgia, serif', '#c4b49a');
+    ctx.fillStyle = '#e9c46a';
+    ctx.beginPath();
+    for (let i = 0; i <= 10; i++) {
+      const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+      const r = i % 2 ? 14 : 34;
+      ctx.lineTo(128 + Math.cos(a) * r, 290 + Math.sin(a) * r);
+    }
+    ctx.fill();
+  }, 0.58, 0.82, new THREE.Vector3(RX - 0.03, 1.8, -2.6), -Math.PI / 2, 0.025);
+
+  // Dartscheibe
+  const dartTex = canvasTex(256, 256, (ctx, w) => {
+    const c = w / 2;
+    ctx.fillStyle = '#111';
+    ctx.beginPath();
+    ctx.arc(c, c, c, 0, Math.PI * 2);
+    ctx.fill();
+    for (let i = 0; i < 20; i++) {
+      for (const [r0, r1, col] of [[110, 120, i % 2 ? '#1d6b3a' : '#a01e1e'], [20, 110, i % 2 ? '#e8dcc0' : '#1a1a1a'], [62, 70, i % 2 ? '#1d6b3a' : '#a01e1e']]) {
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(c, c, r1, (i / 20) * Math.PI * 2, ((i + 1) / 20) * Math.PI * 2);
+        ctx.arc(c, c, r0, ((i + 1) / 20) * Math.PI * 2, (i / 20) * Math.PI * 2, true);
+        ctx.fill();
+      }
+    }
+    ctx.fillStyle = '#1d6b3a';
+    ctx.beginPath();
+    ctx.arc(c, c, 20, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#a01e1e';
+    ctx.beginPath();
+    ctx.arc(c, c, 9, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  const dart = new THREE.Mesh(new THREE.CylinderGeometry(0.23, 0.23, 0.04, 32), [flat('#2a2a2a'), new THREE.MeshLambertMaterial({ map: dartTex }), flat('#2a2a2a')]);
+  dart.rotation.z = Math.PI / 2; // Scheibe zeigt in den Raum (-x)
+  dart.position.set(RX - 0.03, 1.7, 1.9);
+  room.add(dart);
+  for (const [dy, dz] of [[0.05, 0.03], [-0.08, -0.06], [0.01, -0.1]]) {
+    const d = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.004, 0.14, 5), flat('#c9a23a'));
+    d.rotation.z = Math.PI / 2 + 0.2;
+    d.position.set(RX - 0.12, 1.7 + dy, 1.9 + dz);
+    room.add(d);
+  }
+
+  // Jukebox in der Ecke hinten rechts (leuchtende Röhren)
+  const juke = new THREE.Group();
+  juke.position.set(RX - 0.45, 0, -4.2);
+  juke.rotation.y = -Math.PI / 2 + 0.35;
+  room.add(juke);
+  const jbody = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.15, 0.5), new THREE.MeshStandardMaterial({ color: '#4a1f12', roughness: 0.35, metalness: 0.2 }));
+  jbody.position.y = 0.575;
+  jbody.castShadow = true;
+  const jtop = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.5, 20, 1, false, 0, Math.PI), new THREE.MeshStandardMaterial({ color: '#4a1f12', roughness: 0.35, metalness: 0.2 }));
+  jtop.rotation.set(Math.PI / 2, Math.PI / 2, 0);
+  jtop.position.y = 1.15;
+  juke.add(jbody, jtop);
+  const jukeTex = canvasTex(256, 384, (ctx, w, h) => {
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, '#ff5a2a');
+    g.addColorStop(0.35, '#ffd23a');
+    g.addColorStop(0.65, '#3affb0');
+    g.addColorStop(1, '#5a6aff');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = g;
+    ctx.lineWidth = 16;
+    ctx.beginPath();
+    ctx.moveTo(30, h);
+    ctx.lineTo(30, 128);
+    ctx.arc(128, 128, 98, Math.PI, 0);
+    ctx.lineTo(226, h);
+    ctx.stroke();
+    ctx.lineWidth = 6;
+    for (let i = 0; i < 5; i++) {
+      ctx.beginPath();
+      ctx.moveTo(60 + i * 34, h - 20);
+      ctx.lineTo(60 + i * 34, 190);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255,240,200,0.9)';
+    ctx.fillRect(70, 110, 116, 60);
+  });
+  const jlight = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 1.08), new THREE.MeshBasicMaterial({ map: jukeTex, color: hdr('#ffffff', 1.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  jlight.position.set(0, 0.86, 0.252);
+  jlight.renderOrder = 5;
+  juke.add(jlight);
+  neons.push(Object.assign(jlight, { userData: { k: 1.8, color: new THREE.Color('#ffffff'), ph: 3, flicker: 0, juke: true } }));
+
+  // Hängelampen über der Theke (nur Glühbirne und Lichthof, kein eigenes Licht)
+  const pendants = [];
+  for (const x of [-1.1, 0, 1.1]) {
+    const g = new THREE.Group();
+    g.position.set(BAR.x + x, 2.35, BAR.z + 0.05);
+    const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, RH - 2.35, 4), flat('#111'));
+    cord.position.y = (RH - 2.35) / 2;
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, 0.06, 8), new THREE.MeshStandardMaterial({ color: '#b08a4a', roughness: 0.3, metalness: 0.9 }));
+    const b = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), new THREE.MeshBasicMaterial({ color: hdr('#ffd9a0', 3.2) }));
+    b.position.y = -0.06;
+    g.add(cord, cap, b);
+    room.add(g);
+    pendants.push(b);
+  }
+
   // Raum ist unbewegt: gleiche Materialien zusammenfassen (Flammen bleiben einzeln)
-  mergeStatic(room, new Set([...flames, ...sconces]));
+  mergeStatic(room, new Set([...flames, ...sconces, ...pendants]));
 
   // ---------- Tisch ----------
   const tableG = new THREE.Group();
   scene.add(tableG);
-  const topTex = canvasTex(1024, 1024, (ctx, w, h) => planks(ctx, w, h, { n: 7, base: [120, 74, 40], vary: 0.12, grain: 26 }));
+  const topTex = canvasTex(1024, 1024, (ctx, w, h) => {
+    planks(ctx, w, h, { n: 7, base: [104, 62, 32], vary: 0.14, grain: 26 });
+    rings(ctx, w, h, 14, { burns: 6 });
+  });
   const feltTex = canvasTex(1024, 1024, (ctx, w, h) => {
-    ctx.fillStyle = '#1d5a41';
+    ctx.fillStyle = '#1a5039';
     ctx.fillRect(0, 0, w, h);
     const g = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
     g.addColorStop(0, 'rgba(255,255,255,0.06)');
@@ -449,15 +824,29 @@ export function createWorld(container) {
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
     noise(ctx, w, h, 30000, 0.07);
+    // abgewetzte Stellen vor den Plätzen, Flecken, Brandlöcher
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const x = w / 2 + Math.cos(a) * w * 0.36;
+      const y = h / 2 + Math.sin(a) * h * 0.36;
+      const g2 = ctx.createRadialGradient(x, y, 0, x, y, w * 0.12);
+      g2.addColorStop(0, 'rgba(200,230,200,0.06)');
+      g2.addColorStop(1, 'rgba(200,230,200,0)');
+      ctx.fillStyle = g2;
+      ctx.fillRect(0, 0, w, h);
+    }
+    grime(ctx, w, h, { stains: 9, streaks: 0, soot: 0 });
+    rings(ctx, w, h, 3, { burns: 0 });
     ctx.strokeStyle = 'rgba(233,196,106,0.55)';
     ctx.lineWidth = 5;
     ctx.beginPath();
     ctx.arc(w / 2, h / 2, w * 0.46, 0, Math.PI * 2);
     ctx.stroke();
   });
-  const tableTop = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.08, 36), [
-    flat('#5a3820'),
-    new THREE.MeshLambertMaterial({ map: topTex }),
+  // Lackiertes Holz: spiegelt Lampe und Kerzen (Umgebungsbild siehe unten)
+  const tableTop = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.08, 48), [
+    new THREE.MeshStandardMaterial({ color: '#5a3820', roughness: 0.35 }),
+    new THREE.MeshStandardMaterial({ map: topTex, roughness: 0.32 }),
     flat('#3a2414'),
   ]);
   tableTop.scale.set(TABLE.rx, 1, TABLE.rz);
@@ -465,7 +854,7 @@ export function createWorld(container) {
   tableTop.receiveShadow = true;
   tableTop.castShadow = true;
   tableG.add(tableTop);
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(1, 0.045, 5, 36), flat('#3e2614'));
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(1, 0.045, 8, 64), new THREE.MeshStandardMaterial({ color: '#3e2614', roughness: 0.3 }));
   rim.rotation.x = Math.PI / 2;
   rim.scale.set(TABLE.rx, TABLE.rz, 1);
   rim.position.y = TABLE.y - 0.01;
@@ -491,7 +880,7 @@ export function createWorld(container) {
   holder.position.y = 0.015;
   const wax = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.033, 0.16, 7), flat('#efe6cf'));
   wax.position.y = 0.11;
-  const candleFlame = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.06, 5), new THREE.MeshBasicMaterial({ color: '#ffd27a' }));
+  const candleFlame = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.06, 5), new THREE.MeshBasicMaterial({ color: hdr('#ffd27a', 3) }));
   candleFlame.position.y = 0.22;
   candleG.add(holder, wax, candleFlame);
   holder.castShadow = wax.castShadow = true;
@@ -503,7 +892,7 @@ export function createWorld(container) {
   scene.add(lamp);
   const shade = new THREE.Mesh(
     new THREE.CylinderGeometry(0.1, 0.42, 0.26, 12, 1, true),
-    new THREE.MeshLambertMaterial({ color: '#2f4a3a', side: THREE.DoubleSide, flatShading: true }),
+    new THREE.MeshStandardMaterial({ color: '#2b4536', side: THREE.DoubleSide, roughness: 0.35, metalness: 0.7 }),
   );
   shade.position.y = 0.13;
   const shadeIn = new THREE.Mesh(
@@ -511,7 +900,7 @@ export function createWorld(container) {
     new THREE.MeshBasicMaterial({ color: '#ffd9a0', side: THREE.BackSide }),
   );
   shadeIn.position.y = 0.13;
-  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), new THREE.MeshBasicMaterial({ color: '#fff2cf' }));
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), new THREE.MeshBasicMaterial({ color: hdr('#fff2cf', 3) }));
   bulb.position.y = 0.04;
   const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, RH - lampY - 0.26, 4), flat('#111'));
   cord.position.y = 0.26 + (RH - lampY - 0.26) / 2;
@@ -519,7 +908,7 @@ export function createWorld(container) {
 
   // Lichtkegel (weicher Volumen-Fake)
   const coneMat = new THREE.ShaderMaterial({
-    uniforms: { color: { value: new THREE.Color('#ffc98a') }, opacity: { value: 0.16 } },
+    uniforms: { color: { value: new THREE.Color('#ffc98a') }, opacity: { value: 0.2 } },
     vertexShader: `varying vec3 vN; varying vec3 vV; varying float vH;
       void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); vN = normalize(normalMatrix*normal); vV = normalize(-mv.xyz); vH = uv.y; gl_Position = projectionMatrix*mv; }`,
     fragmentShader: `uniform vec3 color; uniform float opacity; varying vec3 vN; varying vec3 vV; varying float vH;
@@ -564,8 +953,8 @@ export function createWorld(container) {
   // Rauchschwaden
   const smokeTex = canvasTex(256, 256, softBlob);
   const smokes = [];
-  for (let i = 0; i < 9; i++) {
-    const m = new THREE.SpriteMaterial({ map: smokeTex, color: '#b8a088', transparent: true, opacity: 0.07 + R() * 0.05, depthWrite: false });
+  for (let i = 0; i < 15; i++) {
+    const m = new THREE.SpriteMaterial({ map: smokeTex, color: '#b8a088', transparent: true, opacity: 0.07 + R() * 0.06, depthWrite: false });
     const s = new THREE.Sprite(m);
     const sc = 1.6 + R() * 1.8;
     s.scale.set(sc, sc, 1);
@@ -601,6 +990,7 @@ export function createWorld(container) {
   halo(candleG, candleFlame.position, 0.3, '#ffb35a', 0.75);
   halo(lamp, bulb.position, 1.1, '#ffcf8a', 0.55);
   halo(fire, new THREE.Vector3(0, 0.4, 0.25), 1.9, '#ff7a26', 0.5);
+  for (const b of pendants) halo(b.parent, b.position, 0.55, '#ffc070', 0.5);
 
   // ---------- Animation der Umgebung ----------
   function animateEnv(t) {
@@ -614,6 +1004,19 @@ export function createWorld(container) {
     for (const s of sconces) s.scale.y = 0.9 + Math.sin(t * 13 + s.userData.ph) * 0.15;
     candleFlame.scale.set(1 + Math.sin(t * 19) * 0.08, 0.9 + Math.sin(t * 13) * 0.15, 1);
     sconceLight.intensity = 2.2 * (0.92 + Math.sin(t * 9.3) * 0.06);
+    // Neon: ruhiges Summen, ab und zu ein kurzes Flackern
+    for (const n of neons) {
+      const u = n.userData;
+      if (u.juke) {
+        n.material.color.setHSL((t * 0.05) % 1, 0.5, 0.5).multiplyScalar(u.k * 1.6);
+        continue;
+      }
+      if (u.flicker <= 0 && Math.random() < 0.0015) u.flicker = 0.35;
+      u.flicker -= 1 / 60;
+      u.level = (u.flicker > 0 && Math.sin(t * 90 + u.ph) > 0.2 ? 0.25 : 1) * (0.96 + Math.sin(t * 50 + u.ph) * 0.04);
+      n.material.color.copy(u.color).multiplyScalar(u.k * u.level);
+    }
+    neonLight.intensity = 3.2 * beerSign.userData.level;
     lamp.rotation.z = Math.sin(t * 0.5) * 0.012;
     lamp.rotation.x = Math.sin(t * 0.37) * 0.01;
 
@@ -643,20 +1046,44 @@ export function createWorld(container) {
   }
 
   // ---------- Größe ----------
+  // ---------- Spiegelungen: Umgebungsbild der Kneipe (einmal, vom Platz über dem Tisch) ----------
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(scene, 0.03, 0.1, 30, { size: 128, position: new THREE.Vector3(0, 1.45, 0.6) }).texture;
+  scene.environmentIntensity = 0.7;
+  pmrem.dispose();
+
+  // ---------- Nachbearbeitung (Bloom, Farben, Vignette, Korn); ?nofx schaltet sie ab ----------
+  const params = new URLSearchParams(location.search);
+  const post = params.has('nofx') ? null : createPost(renderer, scene, camera);
+  if (!post) document.body.classList.add('nofx');
+
+  function render(t) {
+    if (post) post.render(t);
+    else renderer.render(scene, camera);
+  }
+
+  function setDpr(dpr) {
+    renderer.setPixelRatio(dpr);
+    renderer.setSize(innerWidth, innerHeight);
+    post?.setSize(innerWidth, innerHeight, dpr);
+  }
+
   function resize() {
     renderer.setSize(innerWidth, innerHeight);
+    post?.setSize(innerWidth, innerHeight, renderer.getPixelRatio());
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
   }
   addEventListener('resize', resize);
 
   // Bildrate halten: Liegt die Bildrate zweimal hintereinander (je 2 s) unter 40 FPS,
-  // werden zuerst billige Extras abgeschaltet (cheapSteps, z. B. Filmkorn), danach wird die
-  // Pixelratio in kleinen Schritten gesenkt (nie unter 1). Schatten und Lichteffekte
+  // werden zuerst Extras abgeschaltet (cheapSteps: Bloom), danach wird die Pixelratio in
+  // kleinen Schritten gesenkt (nie unter 1). Schatten, Farbgebung und Lichteffekte
   // bleiben. ?hq schaltet das ab.
-  const fixed = new URLSearchParams(location.search).has('hq');
+  const fixed = params.has('hq');
   const perf = { dpr: maxDpr, t0: 0, frames: 0, low: 0, start: 0 };
   const cheapSteps = [];
+  if (post) cheapSteps.push(() => (post.bloom.enabled = false));
   function adaptQuality(t) {
     if (fixed || document.hidden || (perf.dpr <= 1 && !cheapSteps.length)) return;
     if (!perf.start) perf.start = t;
@@ -680,10 +1107,9 @@ export function createWorld(container) {
         return;
       }
       perf.dpr = Math.max(1, perf.dpr - 0.25);
-      renderer.setPixelRatio(perf.dpr);
-      renderer.setSize(innerWidth, innerHeight);
+      setDpr(perf.dpr);
     }
   }
 
-  return { renderer, scene, camera, animateEnv, adaptQuality, cheapSteps, perf, spot, fill, lampY };
+  return { renderer, scene, camera, animateEnv, adaptQuality, cheapSteps, perf, spot, fill, lampY, render, post };
 }

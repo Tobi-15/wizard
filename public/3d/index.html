@@ -36,7 +36,6 @@
   <!-- 3D-Szene und alles, was an ihr klebt -->
   <div id="stage" class="stage" aria-hidden="true"></div>
   <div class="vignette" aria-hidden="true"></div>
-  <div class="grain" id="grain" aria-hidden="true"></div>
   <div id="labels" class="labels" aria-hidden="true"></div>
 
   <div id="loading" class="loading">
@@ -82,6 +81,7 @@
       <h2>Am Tisch <span id="lobby-count" class="muted"></span></h2>
       <ul id="lobby-players" class="player-list"></ul>
       <div class="emote-row" id="lobby-emotes" aria-label="Emotes"></div>
+      <div class="emote-row bar-row" id="lobby-bar" aria-label="Theke"></div>
       <label class="toggle">
         <input type="checkbox" id="opt-noEvenBids">
         <span>Ansagen dürfen nicht aufgehen <small class="muted">(Summe ≠ Stichzahl)</small></span>
@@ -118,7 +118,8 @@
       </div>
       <div class="topbar-right">
         <button class="icon-btn" id="btn-sound" aria-label="Ton aus" title="Ton an/aus"><svg><use href="#i-sound"/></svg></button>
-        <button class="icon-btn emoji" id="btn-emote" aria-expanded="false" aria-controls="emote-menu" title="Emotes (Tasten 1–6)">🍺</button>
+        <button class="btn small bar-toggle" id="btn-bar" aria-expanded="false" aria-controls="bar-menu" title="Theke: Bier (B), Schluck (T), Zigarette (Z), Zug (R), Zigarre (C)">🍻 Theke</button>
+        <button class="icon-btn emoji" id="btn-emote" aria-expanded="false" aria-controls="emote-menu" title="Emotes (Tasten 1–6)">👋</button>
         <button class="btn small" id="btn-view" title="Ansicht wechseln (Taste V)">Übersicht</button>
         <button class="btn small" id="btn-last">Letzter Stich</button>
         <button class="btn small" id="btn-scores">Punkte</button>
@@ -126,6 +127,7 @@
       </div>
     </header>
     <div class="emote-menu" id="emote-menu" hidden></div>
+    <div class="emote-menu bar-menu" id="bar-menu" hidden aria-label="Theke"></div>
     <div class="status" id="g-status" aria-live="polite"></div>
     <section class="actions" id="g-actions"></section>
     <div class="me-info" id="g-me"></div>

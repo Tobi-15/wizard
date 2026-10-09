@@ -8,6 +8,7 @@ import { TableView } from './table.js';
 import { SUITS, SUIT_NAMES, SUIT_HEX, cardImage, redrawAll, setAnisotropy } from './cards.js';
 import { updateTweens, hashStr } from './util.js';
 import { FIGURES, figureByKey, assignFigures } from '../figures.js';
+import { VICE } from '../vices.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const $ = (id) => document.getElementById(id);
@@ -63,21 +64,6 @@ let wantedRoom = new URLSearchParams(location.search).get('room')?.toUpperCase()
 let reconnectDelay = 500;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-// Filmkorn: kleines Rauschbild einmal erzeugen
-{
-  const c = document.createElement('canvas');
-  c.width = c.height = 256;
-  const ctx = c.getContext('2d');
-  const img = ctx.createImageData(256, 256);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const v = Math.random() * 255;
-    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
-    img.data[i + 3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
-  document.documentElement.style.setProperty('--grain', `url(${c.toDataURL('image/png')})`);
-}
-
 // ---------- 3D ----------
 let world;
 try {
@@ -89,8 +75,6 @@ try {
   throw err;
 }
 setAnisotropy(world.renderer.capabilities.getMaxAnisotropy());
-// Wird es zu langsam, fällt zuerst das Filmkorn weg (bevor die Auflösung sinkt)
-world.cheapSteps.push(() => $('grain').remove());
 
 const table = new TableView(world, {
   // Wer weniger Bewegung möchte, startet in der ruhigen Übersicht (Kopf folgt dort nicht der Maus)
@@ -120,16 +104,18 @@ function connect() {
     if (msg.type === 'state') {
       prevGame = state?.game ?? null;
       const first = !state;
-      state = msg;
       wantedRoom = msg.room.code;
       store.set('wizard.room', wantedRoom);
       if (new URLSearchParams(location.search).get('room') !== wantedRoom) {
         history.replaceState(null, '', `?room=${wantedRoom}`);
       }
+      const prevVice = myViceState();
+      state = msg;
       table.sync(state);
       if (first) table.snapCamera();
       render();
       effects(prevGame, state.game);
+      viceEffects(prevVice, myViceState(), first);
     } else if (msg.type === 'error') {
       toast(msg.message, true);
       table.rejectPending();
@@ -233,6 +219,12 @@ const SOUNDS = {
   turn: () => { tone(660, 0, 0.16); tone(880, 0.12, 0.22); },
   win: () => { tone(784, 0, 0.14); tone(988, 0.09, 0.14); tone(1319, 0.18, 0.3); },
   fanfare: () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, i * 0.12, 0.35, 'triangle', 0.14)); },
+  // Theke
+  clink: () => { tone(1568, 0, 0.25, 'sine', 0.05); tone(2349, 0.004, 0.18, 'sine', 0.03); noise(0, 0.05, { freq: 300, vol: 0.4 }); },
+  sip: () => { for (const t of [0.75, 1.0, 1.25]) tone(140, t, 0.09, 'sine', 0.12); },
+  lighter: () => { noise(0, 0.03, { freq: 4000, type: 'highpass', vol: 0.5 }); noise(0.05, 0.5, { freq: 900, type: 'bandpass', q: 0.6, vol: 0.12 }); },
+  puff: () => { noise(0.4, 0.6, { freq: 700, type: 'bandpass', q: 0.5, vol: 0.18 }); noise(1.55, 1.0, { freq: 500, type: 'bandpass', q: 0.4, vol: 0.22 }); },
+  cigar: () => { [392, 523, 659, 784].forEach((f, i) => tone(f, i * 0.1, 0.4, 'triangle', 0.12)); tone(1047, 0.42, 0.6, 'sine', 0.08); },
 };
 // Kneipen-Geräusche: leises Raumrauschen und Kaminknistern (nur bei eingeschaltetem Ton)
 let ambience = null;
@@ -372,6 +364,7 @@ function render() {
   if (!state.game) {
     show('lobby');
     renderLobby();
+    renderBar();
     renderPlates();
     document.title = `Wizard · ${state.room.code}`;
     return;
@@ -379,6 +372,7 @@ function render() {
   show('game');
   renderGame();
   renderPlates();
+  renderBar();
 }
 
 function renderLobby() {
@@ -671,12 +665,17 @@ $('emote-menu').replaceChildren(...emoteButtons((kind) => { sendEmote(kind); tog
 $('lobby-emotes').replaceChildren(...emoteButtons(sendEmote));
 
 function toggleEmoteMenu(open = $('emote-menu').hidden) {
+  if (open) toggleBarMenu(false);
   $('emote-menu').hidden = !open;
   $('btn-emote').setAttribute('aria-expanded', String(open));
 }
 
 function sendEmote(kind) {
   if (!state || !emoteByKind[kind]) return;
+  if (kind === 'cheers' && !table.myVice()?.canDrink()) {
+    toast('Prost ohne Bier? Erst eins bestellen (Taste B).', true);
+    return;
+  }
   const t = performance.now();
   if (t - lastEmote < 1000) return;
   lastEmote = t;
@@ -688,6 +687,10 @@ function sendEmote(kind) {
 }
 
 function receiveEmote(id, kind) {
+  if (kind === 'sip' || kind === 'puff') {
+    if (table.remoteEmote(id, kind) && !state?.game) play(kind);
+    return;
+  }
   const e = emoteByKind[kind];
   if (!e || !state) return;
   if (!table.remoteEmote(id, kind)) return;
@@ -707,6 +710,122 @@ function myBubble(text) {
   el.classList.add('pop');
   clearTimeout(myBubbleTimer);
   myBubbleTimer = setTimeout(() => (el.hidden = true), 2400);
+}
+
+// ---------- Theke: Bier, Zigarette, Zigarre ----------
+function myViceState() {
+  return state?.room.players.find((p) => p.id === state.me)?.vice ?? null;
+}
+
+/** Bestellen beim Server. Ist die Zigarette bei mir schon abgebrannt (oder kommt eine
+ * Zigarre statt der Zigarette), wird vorher ausgedrückt. */
+function order(item) {
+  if (!state) return;
+  const v = myViceState();
+  const props = table.myVice();
+  if (item === 'beer' && props?.beer && props.level > VICE.refillBelow) {
+    return toast(`Trink erst mal aus – dein Bier ist noch ${Math.round(props.level * 100)} % voll.`, true);
+  }
+  if (item === 'cigar' && !(v?.cigars > 0)) {
+    return toast(`Zigarren gibt's nur für eine richtige Ansage von mindestens ${VICE.cigarMinBid} Stichen.`, true);
+  }
+  if ((item === 'cigarette' || item === 'cigar') && v?.smoke) {
+    const burnt = !props?.isSmoking();
+    if (burnt || (item === 'cigar' && v.smoke.kind === 'cigarette')) send({ type: 'order', item: 'putout' });
+    else return toast(v.smoke.kind === 'cigar' ? 'Du hast doch schon eine Zigarre an.' : 'Du rauchst doch schon eine.', true);
+  }
+  send({ type: 'order', item });
+  if (item === 'beer') myBubble('🍺 Wirt, ein Bier!');
+  if (item === 'cigar') myBubble('🎩 Eine Zigarre, bitte!');
+  toggleBarMenu(false);
+}
+
+function sip() {
+  const props = table.myVice();
+  if (!props?.canDrink()) return order('beer');
+  if (!throttleAct()) return;
+  send({ type: 'emote', kind: 'sip' });
+  table.selfEmote('sip');
+  play('sip');
+}
+
+function puff() {
+  const props = table.myVice();
+  if (!props?.isSmoking()) return order('cigarette');
+  if (!throttleAct()) return;
+  send({ type: 'emote', kind: 'puff' });
+  table.selfEmote('puff');
+  play('puff');
+}
+
+let lastAct = 0;
+function throttleAct() {
+  const t = performance.now();
+  if (t - lastAct < 2600) return false; // erst den Schluck/Zug zu Ende
+  lastAct = t;
+  return true;
+}
+
+function viceEffects(prev, v, first) {
+  if (!v || first || !prev) return;
+  if (v.cigars > prev.cigars) {
+    play('cigar');
+    toast(`🎩 Zigarre verdient – mehr als 3 Stiche richtig angesagt! Anzünden mit Taste C.`);
+    myBubble('🎩 Zigarre verdient!');
+  }
+}
+
+function barItems() {
+  const v = myViceState();
+  const props = table.myVice();
+  const pending = props && v?.beer && props.beer?.n !== v.beer.n; // der Wirt ist unterwegs
+  const level = props?.beer ? Math.round(props.level * 100) : 0;
+  const smoking = !!props?.isSmoking();
+  const kind = props?.smoking?.kind;
+  const cigars = v?.cigars ?? 0;
+  return [
+    {
+      key: 'B', icon: '🍺', label: pending ? 'Kommt gleich' : 'Bier bestellen',
+      sub: pending ? 'Der Wirt bringt es' : props?.beer ? `noch ${level} %` : 'frisch gezapft',
+      disabled: pending || (props?.beer && props.level > VICE.refillBelow),
+      act: () => order('beer'),
+    },
+    { key: 'T', icon: '🫗', label: 'Schluck', sub: props?.beer ? `${v?.beer?.n ?? 0}. Bier` : 'kein Bier', disabled: !props?.canDrink(), act: sip },
+    smoking
+      ? { key: 'Z', icon: '🚭', label: 'Ausdrücken', sub: kind === 'cigar' ? 'Zigarre' : 'Zigarette', act: () => send({ type: 'order', item: 'putout' }) }
+      : { key: 'Z', icon: '🚬', label: 'Zigarette', sub: 'anzünden', act: () => order('cigarette') },
+    { key: 'R', icon: '💨', label: 'Zug nehmen', sub: smoking ? (kind === 'cigar' ? 'an der Zigarre' : 'an der Kippe') : 'nichts an', disabled: !smoking, act: puff },
+    {
+      key: 'C', icon: '🎩', label: 'Zigarre', sub: cigars ? `${cigars}× verdient` : `ab ${VICE.cigarMinBid} richtigen Stichen`,
+      disabled: !cigars || kind === 'cigar', locked: !cigars, act: () => order('cigar'),
+    },
+  ];
+}
+
+function barButtons() {
+  return barItems().map((it) =>
+    h('button', {
+      class: `emote-btn bar-btn${it.locked ? ' locked' : ''}`,
+      disabled: it.disabled,
+      title: `${it.label} (Taste ${it.key})`,
+      'aria-label': `${it.label}: ${it.sub}`,
+      onclick: it.act,
+    }, h('span', { class: 'emoji' }, it.icon), h('span', { class: 'lbl' }, it.label), h('span', { class: 'sub' }, it.sub), h('kbd', {}, it.key)));
+}
+
+function renderBar() {
+  if (!$('bar-menu').hidden) $('bar-menu').replaceChildren(...barButtons());
+  if (state && !state.game) $('lobby-bar').replaceChildren(...barButtons());
+}
+setInterval(() => state && renderBar(), 1000); // Füllstand, Wirt unterwegs
+
+function toggleBarMenu(open = $('bar-menu').hidden) {
+  $('bar-menu').hidden = !open;
+  $('btn-bar').setAttribute('aria-expanded', String(open));
+  if (open) {
+    toggleEmoteMenu(false);
+    renderBar();
+  }
 }
 
 // Blick an die anderen schicken (nur in der Ego-Perspektive, gedrosselt)
@@ -940,8 +1059,10 @@ $('btn-view').addEventListener('click', toggleView);
 $('pick-prev').addEventListener('click', () => stepFigure(-1));
 $('pick-next').addEventListener('click', () => stepFigure(1));
 $('btn-emote').addEventListener('click', () => toggleEmoteMenu());
+$('btn-bar').addEventListener('click', () => toggleBarMenu());
 addEventListener('pointerdown', (e) => {
   if (!$('emote-menu').hidden && !e.target.closest('#emote-menu, #btn-emote')) toggleEmoteMenu(false);
+  if (!$('bar-menu').hidden && !e.target.closest('#bar-menu, #btn-bar')) toggleBarMenu(false);
 });
 $('btn-last').addEventListener('click', () => {
   renderLastTrick();
@@ -971,6 +1092,12 @@ stage.addEventListener('pointerdown', (e) => {
 stage.addEventListener('pointerup', (e) => {
   const id = table.pick(toNdc(e));
   if (id && id === pressedCard) table.click(ndc);
+  else if (!id && !pressedCard) {
+    // Klick auf mein Bier oder meinen Aschenbecher
+    const prop = table.pickProp(ndc);
+    if (prop === 'beer') sip();
+    else if (prop === 'smoke') puff();
+  }
   pressedCard = null;
 });
 stage.addEventListener('pointerleave', () => {
@@ -991,7 +1118,19 @@ addEventListener('keydown', (e) => {
     sendEmote(EMOTES[Number(e.key) - 1].kind);
     return;
   }
-  if (e.key === 'Escape') toggleEmoteMenu(false);
+  if (e.key === 'Escape') {
+    toggleEmoteMenu(false);
+    toggleBarMenu(false);
+  }
+  // Theke: B Bier, T Schluck, Z Zigarette (an/aus), R Zug, C Zigarre
+  if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+    const k = e.key.toLowerCase();
+    if (k === 'b') return order('beer');
+    if (k === 't') return sip();
+    if (k === 'r') return puff();
+    if (k === 'c') return order('cigar');
+    if (k === 'z') return table.myVice()?.isSmoking() ? send({ type: 'order', item: 'putout' }) : order('cigarette');
+  }
   const g = state.game;
   if (!g) {
     // Lobby: ←/→ blättert durch die Figuren
@@ -1047,7 +1186,8 @@ function frame(ms) {
   table.update(t, dt);
   sendGaze(ms);
   positionPlates();
-  world.renderer.render(world.scene, world.camera);
+  if (world.post) world.post.final.uniforms.ego.value = table.egoBlend;
+  world.render(t);
   world.adaptQuality(t);
   frames += 1;
   if (frames === 2) {

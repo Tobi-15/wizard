@@ -55,3 +55,6 @@ export function deckSpot(a, out = new THREE.Vector3()) {
   onEllipse(a, TABLE.rx - 0.33, TABLE.rz - 0.27, TABLE.y + 0.003, out);
   return out.addScaledVector(tangent(a), 0.28);
 }
+
+/** Theke hinten rechts: Mitte der Theke (Boden), der Wirt steht dahinter. */
+export const BAR = { x: 2.9, z: -4.25, len: 3.4, depth: 0.62 };
