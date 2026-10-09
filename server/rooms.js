@@ -103,6 +103,15 @@ export class Rooms {
         case 'nextRound':
           gameOf(room).nextRound();
           break;
+        case 'abortGame':
+          // Host bricht die laufende Partie ab: alle zurück in die Lobby
+          if (player.id !== room.hostId) throw new GameError('Nur der Host kann das Spiel abbrechen.');
+          if (!room.game) throw new GameError('Es läuft kein Spiel.');
+          clearTimeout(room.trickTimer);
+          clearTimeout(room.botTimer);
+          room.game = null;
+          room.players = room.players.filter((p) => p.bot || p.conns.size > 0);
+          break;
         case 'backToLobby':
           if (player.id !== room.hostId) throw new GameError('Nur der Host kann das.');
           if (room.game && room.game.phase !== 'gameOver') throw new GameError('Das Spiel läuft noch.');
@@ -220,15 +229,23 @@ export class Rooms {
     if (room.players.length !== before) this.broadcast(room);
   }
 
+  /**
+   * Tisch verlassen. Während einer Partie übernimmt ein Bot den Platz, damit die anderen
+   * weiterspielen können; ist kein Mensch mehr da, wird der Raum gelöscht.
+   */
   leave(conn, room, player) {
-    if (room.game && room.game.phase !== 'gameOver') {
-      throw new GameError('Während eines Spiels kann man nicht austreten.');
-    }
     for (const c of player.conns) {
       c.ctx = null;
       c.send({ type: 'left' });
     }
-    room.players = room.players.filter((p) => p !== player);
+    player.conns.clear();
+    const running = room.game && room.game.phase !== 'gameOver';
+    if (running) {
+      player.bot = true;
+      player.token = `bot-${randomBytes(8).toString('hex')}`; // der alte Browser kommt nicht wieder auf den Platz
+    } else {
+      room.players = room.players.filter((p) => p !== player);
+    }
     if (!room.players.some(human)) {
       clearTimeout(room.botTimer);
       this.rooms.delete(room.code);

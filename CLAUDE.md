@@ -39,7 +39,7 @@ Das Kartenspiel Wizard (3–6 Spieler) als Browser-Spiel. Tobi spielt es mit Fre
 | `public/figures.js` | Liste der Spielfiguren (Schlüssel, Name, Spruch) und `assignFigures()` – von 2D- und 3D-Client gemeinsam genutzt |
 
 **Protokoll** (JSON über WebSocket):
-- Client → Server: `create`, `join`, `leave`, `setOption`, `setCharacter`, `start`, `chooseTrump`, `bid`, `play`, `nextRound`, `backToLobby`, `order`, `addBot`, `removeBot`
+- Client → Server: `create`, `join`, `leave`, `setOption`, `setCharacter`, `start`, `chooseTrump`, `bid`, `play`, `nextRound`, `backToLobby`, `abortGame`, `order`, `addBot`, `removeBot`
 - Server → Client: `state` (`{me, room, game}`), `error`, `left`
 - **Spielfigur:** `room.players[].character` (Schlüssel aus `public/figures.js` oder `null` = automatisch). `create`/`join` dürfen `character` mitbringen (wird übernommen, wenn frei), `setCharacter {character}` geht nur ohne laufende Partie (oder bei `gameOver`). Der Server kennt die Figurenliste nicht, er prüft nur das Format und dass niemand eine Figur doppelt hat.
 - Nur Darstellung (3D-Client), ändert keinen Spielzustand und löst keinen `state` aus:
@@ -49,6 +49,7 @@ Das Kartenspiel Wizard (3–6 Spieler) als Browser-Spiel. Tobi spielt es mit Fre
 
 - **Theke** (`order {item}` mit `beer`, `cigarette`, `cigar`, `putout`; Regeln und Zeiten in `public/vices.js`, gemeinsam für Server und 3D-Client): Bier geht erst wieder, wenn das alte höchstens noch ein Viertel voll ist (ein Bier hält 4 min). Zigarette 3 min, Zigarre 7 min, dann landet sie als Kippe im Aschenbecher. **Zigarre** nur mit verdienter Zigarre: Nach jeder Runde (`awardCigars` nach `collectTrick`) bekommt jeder, der **mehr als 3 Stiche** (also ≥ 4) angesagt und genau bekommen hat, eine Zigarre gutgeschrieben (`player.vice.cigars`, bleibt im Raum über Partien hinweg). Der Server schickt pro Spieler in `room.players[].vice` `{beer: {age, n} | null, smoke: {kind, age} | null, cigars, butts}` – Alter in ms statt Uhrzeit. Ändert nichts am Spiel.
 
+- **Beenden** (Knopf „Beenden“ im Spiel, 2D und 3D): `abortGame` (nur Host) bricht die laufende Partie ab, alle landen in der Lobby. `leave` geht jederzeit: Während einer Partie übernimmt ein Bot den Platz (neues Token, der alte Browser kommt nicht zurück), ist kein Mensch mehr da, wird der Raum gelöscht. Vorher konnte man eine laufende Partie nicht verlassen und landete beim Neuladen immer wieder darin.
 - **Bots** (zum Allein-Testen, Knopf „🤖 Bot hinzufügen“ in der Lobby, nur Host, × entfernt sie wieder): Server-Spieler mit `bot: true` ohne Verbindung. `scheduleBots` (am Ende von `broadcast`) lässt den Bot am Zug nach `botDelayMs` (~1,1 s) ziehen. Bots gelten als online, werden nie Host und beim Aufräumen der Lobby nicht entfernt; geht der letzte Mensch, wird der Raum gelöscht. Sie bestellen zum Start und nach Runden manchmal Bier/Zigarette und zünden verdiente Zigarren an. `nextRound` drückt immer ein Mensch.
 
 Der Server ist die einzige Wahrheit. Spielzustand liegt **nur im Arbeitsspeicher**.

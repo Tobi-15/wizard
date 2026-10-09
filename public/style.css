@@ -511,3 +511,7 @@ p.to-3d a { color: #3d2a86; font-weight: 700; }
   font: 700 1.1rem/1 var(--font-body, sans-serif); padding: 0 2px; margin-left: -2px;
 }
 .remove-bot:hover { color: #b23a3a; }
+
+/* Beenden-Dialog */
+.quit-options { display: grid; gap: 10px; padding-top: 6px; }
+.quit-options p { margin: 0; }

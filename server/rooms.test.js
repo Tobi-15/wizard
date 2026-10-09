@@ -226,3 +226,40 @@ test('Allein gegen zwei Bots: ein ganzes Spiel läuft durch', async () => {
   assert.ok(!a.out.some((m) => m.type === 'error'), a.out.filter((m) => m.type === 'error').map((m) => m.message).join());
   rooms.close();
 });
+
+test('Verlassen während der Partie: ein Bot übernimmt; Host kann abbrechen', () => {
+  const rooms = new Rooms({ botDelayMs: 60000 });
+  const { a, b, c, ids } = table(rooms);
+  rooms.handle(a, { type: 'start' });
+  rooms.handle(b, { type: 'leave' });
+  assert.equal(b.last('left').type, 'left');
+  const players = a.last('state').room.players;
+  assert.equal(players.length, 3);
+  assert.ok(players[1].bot && players[1].online, 'Ben ist jetzt ein Bot');
+  // Ben kommt mit altem Token nicht zurück (Spiel läuft, Platz gehört dem Bot)
+  rooms.handle(b, { type: 'join', token: 'token-b-123', name: 'Ben', code: players.length && a.last('state').room.code });
+  assert.match(b.last('error').message, /Spiel läuft schon/);
+  rooms.handle(c, { type: 'abortGame' });
+  assert.equal(c.last('error').message, 'Nur der Host kann das Spiel abbrechen.');
+  rooms.handle(a, { type: 'abortGame' });
+  assert.equal(c.last('state').game, null);
+  assert.deepEqual(c.last('state').room.players.map((p) => p.id), ids);
+  // alle Menschen gehen: Raum weg
+  rooms.handle(a, { type: 'leave' });
+  rooms.handle(c, { type: 'leave' });
+  assert.equal(rooms.rooms.size, 0);
+  rooms.close();
+});
+
+test('Allein mit Bots: Verlassen mitten im Spiel löscht den Raum', () => {
+  const rooms = new Rooms({ botDelayMs: 60000 });
+  const a = conn();
+  rooms.handle(a, { type: 'create', token: 'token-a-123', name: 'Anna' });
+  rooms.handle(a, { type: 'addBot' });
+  rooms.handle(a, { type: 'addBot' });
+  rooms.handle(a, { type: 'start' });
+  rooms.handle(a, { type: 'leave' });
+  assert.equal(a.last('left').type, 'left');
+  assert.equal(rooms.rooms.size, 0);
+  rooms.close();
+});

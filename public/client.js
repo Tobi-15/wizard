@@ -745,6 +745,29 @@ $('btn-sound').addEventListener('click', () => {
   renderSoundButton();
 });
 $('btn-scores').addEventListener('click', openScores);
+// Beenden: Host bricht die Partie ab (alle in die Lobby), sonst Platz an einen Bot abgeben
+function openQuit() {
+  if (!state) return;
+  const isHost = state.room.hostId === state.me;
+  const running = state.game && state.game.phase !== 'gameOver';
+  const others = state.room.players.filter((p) => p.id !== state.me && !p.bot).length;
+  $('btn-abort').hidden = !isHost || !running;
+  $('quit-hint').textContent = !running
+    ? 'Du verlässt den Tisch.'
+    : others
+      ? 'Wenn du den Tisch verlässt, übernimmt ein Bot deinen Platz und die anderen spielen weiter.'
+      : 'Du bist der einzige Mensch am Tisch – die Partie wird beendet.';
+  $('dlg-quit').showModal();
+}
+$('btn-end').addEventListener('click', openQuit);
+$('btn-abort').addEventListener('click', () => {
+  send({ type: 'abortGame' });
+  $('dlg-quit').close();
+});
+$('btn-quit').addEventListener('click', () => {
+  send({ type: 'leave' });
+  $('dlg-quit').close();
+});
 $('btn-last').addEventListener('click', () => {
   renderLastTrick();
   $('dlg-last').showModal();

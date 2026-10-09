@@ -108,6 +108,7 @@
         <button class="btn small" id="btn-last"><span class="long">Letzter Stich</span><span class="short">Stich</span></button>
         <button class="btn small" id="btn-scores">Punkte</button>
         <a class="btn small to-3d" href="3d/" title="Zur 3D-Ansicht (Kneipe) wechseln">3D</a>
+        <button class="btn small" id="btn-end" title="Spiel abbrechen oder Tisch verlassen">Beenden</button>
       </div>
     </header>
 
@@ -142,6 +143,17 @@
     <div class="last-trick" id="last-trick"></div>
   </dialog>
 
+  <dialog id="dlg-quit" class="dialog quit-dialog">
+    <div class="dialog-head">
+      <h2>Spiel beenden?</h2>
+      <button class="btn small ghost" data-close>Weiterspielen</button>
+    </div>
+    <div class="quit-options">
+      <button class="btn primary" id="btn-abort" hidden>Spiel abbrechen – alle zurück in die Lobby</button>
+      <button class="btn" id="btn-quit">Tisch verlassen</button>
+      <p class="muted small" id="quit-hint"></p>
+    </div>
+  </dialog>
   <canvas id="confetti" class="confetti" hidden></canvas>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 

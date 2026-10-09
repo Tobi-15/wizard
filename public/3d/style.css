@@ -460,3 +460,7 @@ body[data-screen="lobby"] .my-bubble { bottom: auto; top: 18%; left: 62%; }
   background: rgba(255, 240, 210, 0.1); border: 1px solid rgba(233, 196, 106, 0.45); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5);
 }
 .hk .emoji { font-size: 0.95rem; line-height: 1; }
+
+/* Beenden-Dialog */
+.quit-options { display: grid; gap: 10px; padding-top: 6px; }
+.quit-options p { margin: 0; }
