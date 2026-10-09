@@ -260,6 +260,10 @@ export class TableView {
     return this.propsOf(this.myId);
   }
 
+  viceOf(id) {
+    return this.propsOf(id);
+  }
+
   /** Bestellungen aus dem Serverzustand übernehmen: neu Bestelltes bringt der Wirt bzw. wird angezündet. */
   syncVices(players) {
     for (const p of players) {
@@ -300,7 +304,7 @@ export class TableView {
           props.light(sm.kind, vnow());
           if (char) char.react('light', now());
           else if (isMe) this.selfEmote('light');
-          if (char || isMe) this.hooks.sound('lighter');
+          if (char || isMe) this.hooks.sound('light', { remote: !isMe, cigar: sm.kind === 'cigar' });
         };
         if (!fresh) props.light(sm.kind, at + (sm.kind === 'cigar' ? 7 : 0));
         else if (sm.kind === 'cigarette') lightUp();
@@ -976,8 +980,11 @@ export class TableView {
       if (prev.turn !== this.mySeat) this.hooks.bubble(prev.turn, `Trumpf: ${this.hooks.suitName(g.trump)}`);
     }
     if (g.trickWinner != null && prev.trickWinner == null) {
-      const ch = this.charAt(g.trickWinner);
-      ch?.react('win', t, { delay: 0.45 });
+      // Freuen nur, wenn der Stich hilft: Wer damit über seine Ansage kommt, ärgert sich
+      const s = g.seats[g.trickWinner];
+      const after = s.tricks + 1; // der Stich wird erst nach der Anzeigepause gezählt
+      const kind = s.bid == null || after < s.bid ? 'happy' : after === s.bid ? 'win' : after === s.bid + 1 ? 'facepalm' : 'sad';
+      this.charAt(g.trickWinner)?.react(kind, t, { delay: 0.45 });
     }
     if (prev.phase === 'playing' && (g.phase === 'roundEnd' || g.phase === 'gameOver')) {
       g.seats.forEach((s, i) => this.charAt(i)?.react(s.bid === s.tricks ? 'happy' : 'sad', t, { delay: 0.6 + Math.random() * 0.4 }));

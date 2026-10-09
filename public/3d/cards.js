@@ -330,8 +330,10 @@ function material(key, tex, mode) {
       // transparent, damit die Hand nach Rauch/Staub gezeichnet wird (renderOrder hoch)
       m = new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.5, transparent: true, fog: false, depthTest: false, depthWrite: false, toneMapped: false });
     } else {
-      // ohne Tonemapping, damit Zahlen und Farben auf dem Tisch kräftig bleiben
-      m = new THREE.MeshLambertMaterial({ map: tex, alphaTest: 0.5, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.22, toneMapped: false });
+      // Matt und gedämpft: Unter der hellen Hängelampe würde eine weiße Karte sonst weit über
+      // „weiß“ liegen und durch Bloom/Tonemapping (post.js) blenden. Der gleichmäßige Eigenanteil
+      // (emissive) hält die Karten auch am Rand des Lichtkegels lesbar.
+      m = new THREE.MeshLambertMaterial({ map: tex, alphaTest: 0.5, color: new THREE.Color(0.32, 0.32, 0.32), emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.5 });
     }
     mats.set(k, m);
   }

@@ -81,7 +81,7 @@ const table = new TableView(world, {
   view: store.get('wizard.view3d') ?? (reduceMotion ? 'overview' : 'ego'),
   sortHand,
   reduceMotion,
-  sound: (name) => play(name),
+  sound: (name, opts) => play(name, opts),
   bubble: (seat, text) => showBubble(seat, text),
   play: (cardId) => send({ type: 'play', cardId }),
   illegal: () => toast('Diese Karte darfst du gerade nicht spielen.', true),
@@ -206,6 +206,81 @@ function noise(start, dur, { freq = 800, q = 1, vol = 0.2, type = 'lowpass' } = 
   src.connect(f).connect(g).connect(audio.destination);
   src.start(audio.currentTime + start);
 }
+// ---------- Rauch-Geräusche ----------
+const SMOKE_T = {
+  selfPuff: { inhale: 0.5, inhaleDur: 0.95, exhale: 1.6 },
+  selfLight: { flint: 0.38, inhale: 0.75, inhaleDur: 0.9, exhale: 1.9 },
+  remotePuff: { inhale: 1.3, inhaleDur: 0.85, exhale: 2.35 },
+  remoteLight: { flint: 1.0, inhale: 1.25, inhaleDur: 0.8, exhale: 2.25 },
+};
+let breathBuf = null;
+/** Rauschen, das wie Atem klingt: gefiltert, mit weichem An- und Abschwellen und wanderndem Filter. */
+function breath(start, dur, { f0 = 900, f1 = 900, q = 0.7, vol = 0.15, attack = 0.15, release = 0.4, type = 'bandpass' } = {}) {
+  if (!breathBuf) {
+    const len = audio.sampleRate * 2;
+    breathBuf = audio.createBuffer(1, len, audio.sampleRate);
+    const d = breathBuf.getChannelData(0);
+    let b0 = 0, b1 = 0, b2 = 0;
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1; // rosa Rauschen (weicher als weißes)
+      b0 = 0.997 * b0 + w * 0.029591;
+      b1 = 0.985 * b1 + w * 0.032534;
+      b2 = 0.95 * b2 + w * 0.048056;
+      d[i] = (b0 + b1 + b2 + w * 0.05) * 2.2;
+    }
+  }
+  const t0 = audio.currentTime + start;
+  const src = audio.createBufferSource();
+  src.buffer = breathBuf;
+  src.loop = true;
+  const f = audio.createBiquadFilter();
+  f.type = type;
+  f.Q.value = q;
+  f.frequency.setValueAtTime(f0, t0);
+  f.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+  const g = audio.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + attack);
+  g.gain.setValueAtTime(vol, t0 + Math.max(attack, dur - release));
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(f).connect(g).connect(audio.destination);
+  src.start(t0, Math.random() * 1.5);
+  src.stop(t0 + dur + 0.05);
+}
+/** Ganz kurzes Knacken (Reibrad, glimmender Tabak, Lippen). */
+function tick(start, { freq = 4000, vol = 0.15, dur = 0.004, type = 'highpass' } = {}) {
+  noise(start, dur, { freq, type, vol, q: 0.8 });
+}
+/** Feuerzeug: Reibrad ratscht, Funke, die Flamme springt an und zischt kurz. */
+function lighter(t, k = 1) {
+  for (let i = 0; i < 4; i++) tick(t + i * 0.012 + Math.random() * 0.005, { freq: 3500 + Math.random() * 2500, vol: 0.35 * k });
+  tone(5200, t + 0.03, 0.05, 'sine', 0.02 * k);
+  breath(t + 0.05, 0.22, { f0: 300, f1: 900, q: 0.5, vol: 0.22 * k, attack: 0.02, release: 0.17, type: 'lowpass' }); // „Fwupp“
+  breath(t + 0.08, 0.7, { f0: 2600, f1: 2200, q: 1.2, vol: 0.04 * k, attack: 0.05, release: 0.3 }); // Flamme
+}
+/** Ziehen: einatmen durch die Zigarette, dabei knistert der Tabak; Zigarre in kurzen Paffs. */
+function smokeDraw(t, dur, cigar, k = 1) {
+  if (cigar) {
+    const n = 3;
+    for (let i = 0; i < n; i++) {
+      const s = t + (i * dur) / n;
+      breath(s, dur / n - 0.04, { f0: 500, f1: 700, q: 0.9, vol: 0.09 * k, attack: 0.04, release: 0.1 });
+      tick(s + dur / n - 0.05, { freq: 260, type: 'lowpass', vol: 0.5 * k, dur: 0.02 }); // Lippen-Plopp
+    }
+  } else {
+    breath(t, dur, { f0: 1100, f1: 1700, q: 0.8, vol: 0.07 * k, attack: 0.25, release: 0.2 });
+  }
+  const crackles = cigar ? 8 : 14;
+  for (let i = 0; i < crackles; i++) {
+    tick(t + 0.1 + Math.random() * (dur - 0.15), { freq: 2500 + Math.random() * 4000, vol: (0.04 + Math.random() * 0.08) * k, dur: 0.002 + Math.random() * 0.003 });
+  }
+}
+/** Ausatmen: lang, weich, abfallend (Zigarre tiefer und voller). */
+function exhale(t, cigar, k = 1) {
+  breath(t, cigar ? 1.9 : 1.5, { f0: cigar ? 650 : 850, f1: cigar ? 260 : 380, q: 0.6, vol: (cigar ? 0.16 : 0.13) * k, attack: 0.07, release: 1.0 });
+  breath(t + 0.02, 0.5, { f0: 3000, f1: 1800, q: 0.6, vol: 0.025 * k, attack: 0.03, release: 0.4 }); // Luftzug an den Lippen
+}
+
 const SOUNDS = {
   // Emotes (Zeitpunkte passend zu den Animationen in characters.js)
   knock: () => { for (const t of [0.35, 0.55, 0.75]) { noise(t, 0.14, { freq: 220, vol: 0.9 }); tone(85, t, 0.14, 'sine', 0.3); } },
@@ -222,8 +297,21 @@ const SOUNDS = {
   // Theke
   clink: () => { tone(1568, 0, 0.25, 'sine', 0.05); tone(2349, 0.004, 0.18, 'sine', 0.03); noise(0, 0.05, { freq: 300, vol: 0.4 }); },
   sip: () => { for (const t of [0.75, 1.0, 1.25]) tone(140, t, 0.09, 'sine', 0.12); },
-  lighter: () => { noise(0, 0.03, { freq: 4000, type: 'highpass', vol: 0.5 }); noise(0.05, 0.5, { freq: 900, type: 'bandpass', q: 0.6, vol: 0.12 }); },
-  puff: () => { noise(0.4, 0.6, { freq: 700, type: 'bandpass', q: 0.5, vol: 0.18 }); noise(1.55, 1.0, { freq: 500, type: 'bandpass', q: 0.4, vol: 0.22 }); },
+  // Rauchen (Zeitpunkte passend zu selfEffect in table.js bzw. puff/light in characters.js;
+  // bei Mitspielern später und leiser)
+  light: (o = {}) => {
+    const T = o.remote ? SMOKE_T.remoteLight : SMOKE_T.selfLight;
+    const k = o.remote ? 0.5 : 1;
+    lighter(T.flint, k);
+    smokeDraw(T.inhale, T.inhaleDur, o.cigar, k);
+    exhale(T.exhale, o.cigar, k);
+  },
+  puff: (o = {}) => {
+    const T = o.remote ? SMOKE_T.remotePuff : SMOKE_T.selfPuff;
+    const k = o.remote ? 0.5 : 1;
+    smokeDraw(T.inhale, T.inhaleDur, o.cigar, k);
+    exhale(T.exhale, o.cigar, k);
+  },
   cigar: () => { [392, 523, 659, 784].forEach((f, i) => tone(f, i * 0.1, 0.4, 'triangle', 0.12)); tone(1047, 0.42, 0.6, 'sine', 0.08); },
 };
 // Kneipen-Geräusche: leises Raumrauschen und Kaminknistern (nur bei eingeschaltetem Ton)
@@ -261,10 +349,10 @@ function stopAmbience() {
   ambience = null;
 }
 
-function play(name) {
+function play(name, opts) {
   if (!soundOn || !audio) return;
   if (audio.state === 'suspended') audio.resume();
-  try { SOUNDS[name](); } catch {}
+  try { SOUNDS[name](opts); } catch {}
 }
 function renderSoundButton() {
   const b = $('btn-sound');
@@ -664,14 +752,14 @@ function emoteButtons(onPick) {
     h('button', { class: 'emote-btn', title: `${e.label} (Taste ${i + 1})`, 'aria-label': e.label, onclick: () => onPick(e.kind) },
       h('span', { class: 'emoji' }, e.icon), h('span', { class: 'lbl' }, e.label), h('kbd', {}, i + 1)));
 }
-$('emote-menu').replaceChildren(...emoteButtons((kind) => { sendEmote(kind); toggleEmoteMenu(false); }));
+// Feste Tastenleiste oben rechts im Spiel: Emotes 1–6 und Theke B/T/Z/R/C, immer sichtbar
+function hotkey(key, icon, label, onclick, { disabled = false, title = label } = {}) {
+  return h('button', { class: 'hk', disabled, title: `${title} (Taste ${key})`, 'aria-label': `${title}, Taste ${key}`, onclick },
+    h('kbd', {}, key), h('span', { class: 'emoji', 'aria-hidden': 'true' }, icon), h('span', { class: 'lbl' }, label));
+}
+$('hk-emotes').replaceChildren(...EMOTES.map((e, i) => hotkey(String(i + 1), e.icon, e.label, () => sendEmote(e.kind))));
 $('lobby-emotes').replaceChildren(...emoteButtons(sendEmote));
 
-function toggleEmoteMenu(open = $('emote-menu').hidden) {
-  if (open) toggleBarMenu(false);
-  $('emote-menu').hidden = !open;
-  $('btn-emote').setAttribute('aria-expanded', String(open));
-}
 
 function sendEmote(kind) {
   if (!state || !emoteByKind[kind]) return;
@@ -691,7 +779,9 @@ function sendEmote(kind) {
 
 function receiveEmote(id, kind) {
   if (kind === 'sip' || kind === 'puff') {
-    if (table.remoteEmote(id, kind) && !state?.game) play(kind);
+    if (!table.remoteEmote(id, kind)) return;
+    if (kind === 'puff') play('puff', { remote: true, cigar: table.viceOf(id)?.smoking?.kind === 'cigar' });
+    else play('sip');
     return;
   }
   const e = emoteByKind[kind];
@@ -740,7 +830,6 @@ function order(item) {
   send({ type: 'order', item });
   if (item === 'beer') myBubble('🍺 Wirt, ein Bier!');
   if (item === 'cigar') myBubble('🎩 Eine Zigarre, bitte!');
-  toggleBarMenu(false);
 }
 
 function sip() {
@@ -758,7 +847,7 @@ function puff() {
   if (!throttleAct()) return;
   send({ type: 'emote', kind: 'puff' });
   table.selfEmote('puff');
-  play('puff');
+  play('puff', { cigar: props.smoking?.kind === 'cigar' });
 }
 
 let lastAct = 0;
@@ -789,17 +878,18 @@ function barItems() {
   return [
     {
       key: 'B', icon: '🍺', label: pending ? 'Kommt gleich' : 'Bier bestellen',
+      short: pending ? 'Bier kommt' : props?.beer ? `Bier · ${level} %` : 'Bier',
       sub: pending ? 'Der Wirt bringt es' : props?.beer ? `noch ${level} %` : 'frisch gezapft',
       disabled: pending || (props?.beer && props.level > VICE.refillBelow),
       act: () => order('beer'),
     },
-    { key: 'T', icon: '🫗', label: 'Schluck', sub: props?.beer ? `${v?.beer?.n ?? 0}. Bier` : 'kein Bier', disabled: !props?.canDrink(), act: sip },
+    { key: 'T', icon: '🫗', label: 'Schluck', short: 'Schluck', sub: props?.beer ? `${v?.beer?.n ?? 0}. Bier` : 'kein Bier', disabled: !props?.canDrink(), act: sip },
     smoking
-      ? { key: 'Z', icon: '🚭', label: 'Ausdrücken', sub: kind === 'cigar' ? 'Zigarre' : 'Zigarette', act: () => send({ type: 'order', item: 'putout' }) }
-      : { key: 'Z', icon: '🚬', label: 'Zigarette', sub: 'anzünden', act: () => order('cigarette') },
-    { key: 'R', icon: '💨', label: 'Zug nehmen', sub: smoking ? (kind === 'cigar' ? 'an der Zigarre' : 'an der Kippe') : 'nichts an', disabled: !smoking, act: puff },
+      ? { key: 'Z', icon: '🚭', label: 'Ausdrücken', short: 'Ausdrücken', sub: kind === 'cigar' ? 'Zigarre' : 'Zigarette', act: () => send({ type: 'order', item: 'putout' }) }
+      : { key: 'Z', icon: '🚬', label: 'Zigarette', short: 'Zigarette', sub: 'anzünden', act: () => order('cigarette') },
+    { key: 'R', icon: '💨', label: 'Zug nehmen', short: 'Zug', sub: smoking ? (kind === 'cigar' ? 'an der Zigarre' : 'an der Kippe') : 'nichts an', disabled: !smoking, act: puff },
     {
-      key: 'C', icon: '🎩', label: 'Zigarre', sub: cigars ? `${cigars}× verdient` : `ab ${VICE.cigarMinBid} richtigen Stichen`,
+      key: 'C', icon: '🎩', label: 'Zigarre', short: cigars ? `Zigarre ×${cigars}` : 'Zigarre', sub: cigars ? `${cigars}× verdient` : `ab ${VICE.cigarMinBid} richtigen Stichen`,
       disabled: !cigars || kind === 'cigar', locked: !cigars, act: () => order('cigar'),
     },
   ];
@@ -816,20 +906,18 @@ function barButtons() {
     }, h('span', { class: 'emoji' }, it.icon), h('span', { class: 'lbl' }, it.label), h('span', { class: 'sub' }, it.sub), h('kbd', {}, it.key)));
 }
 
+let barKey = '';
 function renderBar() {
-  if (!$('bar-menu').hidden) $('bar-menu').replaceChildren(...barButtons());
-  if (state && !state.game) $('lobby-bar').replaceChildren(...barButtons());
+  const items = barItems();
+  // nur neu zeichnen, wenn sich etwas geändert hat (sonst flackert der Mauszeiger-Hover)
+  const key = JSON.stringify([!!state?.game, items.map((it) => [it.short, it.sub, !!it.disabled])]);
+  if (key === barKey) return;
+  barKey = key;
+  if (state?.game) {
+    $('hk-bar').replaceChildren(...items.map((it) => hotkey(it.key, it.icon, it.short, it.act, { disabled: !!it.disabled, title: `${it.label}: ${it.sub}` })));
+  } else if (state) $('lobby-bar').replaceChildren(...barButtons());
 }
 setInterval(() => state && renderBar(), 1000); // Füllstand, Wirt unterwegs
-
-function toggleBarMenu(open = $('bar-menu').hidden) {
-  $('bar-menu').hidden = !open;
-  $('btn-bar').setAttribute('aria-expanded', String(open));
-  if (open) {
-    toggleEmoteMenu(false);
-    renderBar();
-  }
-}
 
 // Blick an die anderen schicken (nur in der Ego-Perspektive, gedrosselt)
 const gazeSent = { yaw: 0, pitch: 0, at: null, t: 0, active: false };
@@ -924,6 +1012,8 @@ function renderPlates() {
 }
 
 function positionPlates() {
+  // Oberkante für Schilder: unter der Kopfzeile, im Spiel auch unter der Tastenleiste
+  const TOP = state?.game ? Math.max(58, ($('hotkeys').getBoundingClientRect().bottom || 58) + 4) : 58;
   const rects = [];
   for (const [seat, el] of plates) {
     const p = table.labelPoint(seat);
@@ -943,7 +1033,7 @@ function positionPlates() {
       w,
       h: hgt,
       x: Math.min(Math.max(p.x, w / 2 + (edge ? 24 : 8)), innerWidth - w / 2 - (edge ? 24 : 8)),
-      y: Math.max(p.y, 58 + hgt + 8), // y = Unterkante; nicht unter die Kopfzeile
+      y: Math.max(p.y, TOP + hgt + 8), // y = Unterkante; nicht unter Kopfzeile und Tastenleiste
     });
   }
   // Überlappende Schilder auseinanderschieben: das obere weicht nach oben aus
@@ -956,7 +1046,7 @@ function positionPlates() {
         const [up, low] = a.y <= b.y ? [a, b] : [b, a];
         const overlap = up.y - (low.y - low.h) + 6;
         if (overlap <= 0) continue;
-        const room = up.y - (58 + up.h + 8);
+        const room = up.y - (TOP + up.h + 8);
         const moveUp = Math.min(overlap, Math.max(room, 0));
         up.y -= moveUp;
         low.y += overlap - moveUp;
@@ -1062,12 +1152,6 @@ $('btn-scores').addEventListener('click', openScores);
 $('btn-view').addEventListener('click', toggleView);
 $('pick-prev').addEventListener('click', () => stepFigure(-1));
 $('pick-next').addEventListener('click', () => stepFigure(1));
-$('btn-emote').addEventListener('click', () => toggleEmoteMenu());
-$('btn-bar').addEventListener('click', () => toggleBarMenu());
-addEventListener('pointerdown', (e) => {
-  if (!$('emote-menu').hidden && !e.target.closest('#emote-menu, #btn-emote')) toggleEmoteMenu(false);
-  if (!$('bar-menu').hidden && !e.target.closest('#bar-menu, #btn-bar')) toggleBarMenu(false);
-});
 $('btn-last').addEventListener('click', () => {
   renderLastTrick();
   $('dlg-last').showModal();
@@ -1121,10 +1205,6 @@ addEventListener('keydown', (e) => {
   if (e.key >= '1' && e.key <= '6' && !e.ctrlKey && !e.metaKey && !e.altKey) {
     sendEmote(EMOTES[Number(e.key) - 1].kind);
     return;
-  }
-  if (e.key === 'Escape') {
-    toggleEmoteMenu(false);
-    toggleBarMenu(false);
   }
   // Theke: B Bier, T Schluck, Z Zigarette (an/aus), R Zug, C Zigarre
   if (!e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -1215,6 +1295,7 @@ window.wizard3d = {
   state: () => state,
   handPoints: () => table.handScreenPoints(),
   headPoint: (id) => table.headScreenPoint(id),
+  sounds: SOUNDS, // zum Testen: wizard3d.sounds.light({ cigar: true })
 };
 
 table.showStart();

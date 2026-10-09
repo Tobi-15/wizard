@@ -436,3 +436,27 @@ body[data-screen="lobby"] .my-bubble { bottom: auto; top: 18%; left: 62%; }
   font: 700 1.1rem/1 var(--font-body, sans-serif); padding: 0 2px; margin-left: -2px;
 }
 .remove-bot:hover { color: #b23a3a; }
+
+/* Feste Tastenleiste im Spiel (Emotes und Theke) */
+.hotkeys {
+  position: absolute; top: 56px; right: 14px; max-width: calc(100% - 28px);
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; pointer-events: none;
+}
+.hk-group {
+  pointer-events: auto; display: flex; flex-wrap: wrap; gap: 2px; padding: 3px;
+  background: var(--wood-glass); border: 1px solid var(--line); border-radius: 11px;
+}
+.hk {
+  appearance: none; border: none; background: transparent; color: var(--ink); cursor: pointer;
+  display: flex; align-items: center; gap: 5px; padding: 3px 8px 3px 4px; border-radius: 8px;
+  font: 700 0.76rem var(--font-body); white-space: nowrap;
+}
+.hk:hover:not(:disabled) { background: rgba(255, 240, 210, 0.13); }
+.hk:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+.hk:disabled { opacity: 0.42; cursor: default; }
+.hk kbd {
+  min-width: 19px; height: 19px; padding: 0 4px; display: grid; place-items: center; border-radius: 5px;
+  font: 800 0.7rem var(--font-body); color: var(--gold);
+  background: rgba(255, 240, 210, 0.1); border: 1px solid rgba(233, 196, 106, 0.45); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.5);
+}
+.hk .emoji { font-size: 0.95rem; line-height: 1; }
