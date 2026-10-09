@@ -168,3 +168,61 @@ test('Theke-Emotes sip und puff werden weitergereicht', () => {
   assert.deepEqual(b.last('emote'), { type: 'emote', id: ids[0], kind: 'puff' });
   rooms.close();
 });
+
+test('Bots: nur der Host fügt hinzu/entfernt, Bots zählen nicht als Host', () => {
+  const rooms = new Rooms();
+  const a = conn();
+  const b = conn();
+  rooms.handle(a, { type: 'create', token: 'token-a-123', name: 'Anna' });
+  const code = a.last('state').room.code;
+  rooms.handle(b, { type: 'join', token: 'token-b-123', name: 'Ben', code });
+  rooms.handle(b, { type: 'addBot' });
+  assert.equal(b.last('error').message, 'Nur der Host kann Bots hinzufügen.');
+  rooms.handle(a, { type: 'addBot' });
+  rooms.handle(a, { type: 'addBot' });
+  const players = a.last('state').room.players;
+  assert.deepEqual(players.map((p) => p.name), ['Anna', 'Ben', 'Bot Alrik', 'Bot Hedda']);
+  assert.ok(players[2].bot && players[2].online);
+  rooms.handle(a, { type: 'removeBot', id: players[2].id });
+  assert.deepEqual(a.last('state').room.players.map((p) => p.name), ['Anna', 'Ben', 'Bot Hedda']);
+  rooms.handle(a, { type: 'removeBot', id: players[1].id });
+  assert.equal(a.last('error').message, 'Diesen Bot gibt es nicht.');
+  // Host geht: Ben wird Host, nicht der Bot
+  rooms.handle(a, { type: 'leave' });
+  assert.equal(b.last('state').room.hostId, players[1].id);
+  // Letzter Mensch geht: Raum ist weg
+  rooms.handle(b, { type: 'leave' });
+  assert.equal(rooms.rooms.size, 0);
+  rooms.close();
+});
+
+test('Allein gegen zwei Bots: ein ganzes Spiel läuft durch', async () => {
+  const rooms = new Rooms({ trickDelayMs: 1, botDelayMs: 1 });
+  const a = conn();
+  let done;
+  const finished = new Promise((r) => (done = r));
+  const origSend = a.send.bind(a);
+  a.send = (msg) => {
+    origSend(msg);
+    const g = msg.type === 'state' ? msg.game : null;
+    if (!g) return;
+    if (g.phase === 'gameOver') return done(g);
+    // Mensch spielt zufällig, aber regelkonform (asynchron wie über das Netz)
+    setImmediate(() => {
+      if (g.phase === 'roundEnd') rooms.handle(a, { type: 'nextRound' });
+      else if (g.turn !== g.mySeat) return;
+      else if (g.phase === 'chooseTrump') rooms.handle(a, { type: 'chooseTrump', suit: 'red' });
+      else if (g.phase === 'bidding') rooms.handle(a, { type: 'bid', value: g.forbiddenBid === 0 ? 1 : 0 });
+      else if (g.phase === 'playing' && g.legal.length) rooms.handle(a, { type: 'play', cardId: g.legal[0] });
+    });
+  };
+  rooms.handle(a, { type: 'create', token: 'token-a-123', name: 'Anna' });
+  rooms.handle(a, { type: 'addBot' });
+  rooms.handle(a, { type: 'addBot' });
+  rooms.handle(a, { type: 'setOption', key: 'noEvenBids', value: true });
+  rooms.handle(a, { type: 'start' });
+  const g = await finished;
+  assert.equal(g.history.length, 20);
+  assert.ok(!a.out.some((m) => m.type === 'error'), a.out.filter((m) => m.type === 'error').map((m) => m.message).join());
+  rooms.close();
+});

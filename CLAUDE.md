@@ -25,6 +25,7 @@ Das Kartenspiel Wizard (3–6 Spieler) als Browser-Spiel. Tobi spielt es mit Fre
 | `server/game.js` | Reine Spiellogik ohne I/O: `legalCards` (Hausregel!), `trickWinner`, `Game`-Zustandsautomat (`chooseTrump → bidding → playing → roundEnd → … → gameOver`), `viewFor(playerId)` verbirgt fremde Hände |
 | `server/game.test.js` | Unit-Tests (`npm test`) |
 | `server/rooms.js` | Räume (4-Buchstaben-Code), Beitreten/Reconnect per `token` aus localStorage, Broadcast pro Spieler, volle Stiche werden nach `trickDelayMs` (1500) eingesammelt. Reicht außerdem Blick und Emotes des 3D-Clients weiter (`relayLook`, `relayEmote`) |
+| `server/bot.js` | Computer-Gegner: `botMove(game, seat)` wählt Trumpf, schätzt die Ansage (Zauberer, hohe Trümpfe, Asse) und spielt billigsten Gewinner bzw. höchste Verliererkarte |
 | `server/rooms.test.js` | Tests für das Weiterreichen von Blick und Emotes (Drosselung, Prüfung der Werte) |
 | `server/server.js` | HTTP für `public/` und WebSocket unter `/ws`, Export `startServer()` |
 | `server/index.js` | Startpunkt für `npm start`, startet **immer** (siehe Stolperfallen) |
@@ -38,7 +39,7 @@ Das Kartenspiel Wizard (3–6 Spieler) als Browser-Spiel. Tobi spielt es mit Fre
 | `public/figures.js` | Liste der Spielfiguren (Schlüssel, Name, Spruch) und `assignFigures()` – von 2D- und 3D-Client gemeinsam genutzt |
 
 **Protokoll** (JSON über WebSocket):
-- Client → Server: `create`, `join`, `leave`, `setOption`, `setCharacter`, `start`, `chooseTrump`, `bid`, `play`, `nextRound`, `backToLobby`, `order`
+- Client → Server: `create`, `join`, `leave`, `setOption`, `setCharacter`, `start`, `chooseTrump`, `bid`, `play`, `nextRound`, `backToLobby`, `order`, `addBot`, `removeBot`
 - Server → Client: `state` (`{me, room, game}`), `error`, `left`
 - **Spielfigur:** `room.players[].character` (Schlüssel aus `public/figures.js` oder `null` = automatisch). `create`/`join` dürfen `character` mitbringen (wird übernommen, wenn frei), `setCharacter {character}` geht nur ohne laufende Partie (oder bei `gameOver`). Der Server kennt die Figurenliste nicht, er prüft nur das Format und dass niemand eine Figur doppelt hat.
 - Nur Darstellung (3D-Client), ändert keinen Spielzustand und löst keinen `state` aus:
@@ -47,6 +48,8 @@ Das Kartenspiel Wizard (3–6 Spieler) als Browser-Spiel. Tobi spielt es mit Fre
   - Der 2D-Client ignoriert `look` und zeigt Emotes als Sprechblase am Platz bzw. in der Lobby-Liste an (senden kann er keine).
 
 - **Theke** (`order {item}` mit `beer`, `cigarette`, `cigar`, `putout`; Regeln und Zeiten in `public/vices.js`, gemeinsam für Server und 3D-Client): Bier geht erst wieder, wenn das alte höchstens noch ein Viertel voll ist (ein Bier hält 4 min). Zigarette 3 min, Zigarre 7 min, dann landet sie als Kippe im Aschenbecher. **Zigarre** nur mit verdienter Zigarre: Nach jeder Runde (`awardCigars` nach `collectTrick`) bekommt jeder, der **mehr als 3 Stiche** (also ≥ 4) angesagt und genau bekommen hat, eine Zigarre gutgeschrieben (`player.vice.cigars`, bleibt im Raum über Partien hinweg). Der Server schickt pro Spieler in `room.players[].vice` `{beer: {age, n} | null, smoke: {kind, age} | null, cigars, butts}` – Alter in ms statt Uhrzeit. Ändert nichts am Spiel.
+
+- **Bots** (zum Allein-Testen, Knopf „🤖 Bot hinzufügen“ in der Lobby, nur Host, × entfernt sie wieder): Server-Spieler mit `bot: true` ohne Verbindung. `scheduleBots` (am Ende von `broadcast`) lässt den Bot am Zug nach `botDelayMs` (~1,1 s) ziehen. Bots gelten als online, werden nie Host und beim Aufräumen der Lobby nicht entfernt; geht der letzte Mensch, wird der Raum gelöscht. Sie bestellen zum Start und nach Runden manchmal Bier/Zigarette und zünden verdiente Zigarren an. `nextRound` drückt immer ein Mensch.
 
 Der Server ist die einzige Wahrheit. Spielzustand liegt **nur im Arbeitsspeicher**.
 
@@ -57,7 +60,7 @@ npm install
 npm start                        # http://localhost:3000 (PORT, TRICK_DELAY_MS einstellbar)
 npm test                         # Regeltests
 node scripts/bots.js 6 --even    # 6 Bots, mit noEvenBids
-URL=wss://wizard-zryw.onrender.com/ws TIMEOUT_MS=240000 node scripts/bots.js 6   # gegen Live-Server
+URL=wss://wizard-zryw.onrender.com/ws TIMEOUT_MS=240000 node scripts/bots.js 6   # gegen Live-Server (6 Spieler: wenige Stiche, passt ins Zeitlimit)
 ```
 
 **Oberfläche testen:** Chromium liegt unter `/usr/bin/chromium`. `puppeteer-core` ist nicht im Projekt, sondern wird bei Bedarf in einen temporären Ordner installiert. Jeder Spieler braucht einen eigenen `browser.createBrowserContext()`, weil das localStorage-Token sonst geteilt wird. Sinnvoll ist, Screenshots in Desktop-Größe (1200×860) und Handy-Größe (390×844) anzusehen.

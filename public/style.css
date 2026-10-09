@@ -502,3 +502,12 @@ p.to-3d a { color: #3d2a86; font-weight: 700; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* Bots in der Lobby */
+.tag.bot { background: #d7e3ea; color: #24435a; }
+.add-bot { margin: -0.4rem 0 0.8rem; }
+.remove-bot {
+  appearance: none; border: none; background: transparent; color: #8a7a62; cursor: pointer;
+  font: 700 1.1rem/1 var(--font-body, sans-serif); padding: 0 2px; margin-left: -2px;
+}
+.remove-bot:hover { color: #b23a3a; }

@@ -427,3 +427,12 @@ body[data-screen="lobby"] .my-bubble { bottom: auto; top: 18%; left: 62%; }
 .bar-row { margin-top: -0.6rem; }
 .emote-row.bar-row .bar-btn .sub { display: none; }
 .emote-row.bar-row .bar-btn:disabled:hover { background: #efe5cd; }
+
+/* Bots in der Lobby */
+.tag.bot { background: #d7e3ea; color: #24435a; }
+.add-bot { margin: -0.4rem 0 0.8rem; }
+.remove-bot {
+  appearance: none; border: none; background: transparent; color: #8a7a62; cursor: pointer;
+  font: 700 1.1rem/1 var(--font-body, sans-serif); padding: 0 2px; margin-left: -2px;
+}
+.remove-bot:hover { color: #b23a3a; }

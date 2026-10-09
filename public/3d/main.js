@@ -388,11 +388,14 @@ function renderLobby() {
         h('span', { class: `dot${p.online ? '' : ' off'}`, title: p.online ? 'online' : 'offline' }),
         h('span', { class: 'name' }, p.name),
         h('span', { class: 'fig', title: p.character ? 'gewählte Figur' : 'automatisch zugeteilt' }, figureByKey[figs[i]]?.name),
+        p.bot && h('span', { class: 'tag bot' }, 'Bot'),
         p.id === room.hostId && h('span', { class: 'tag' }, 'Host'),
         p.id === me && h('span', { class: 'tag you' }, 'Du'),
+        p.bot && isHost && h('button', { class: 'remove-bot', title: `${p.name} entfernen`, 'aria-label': `${p.name} entfernen`, onclick: () => send({ type: 'removeBot', id: p.id }) }, '×'),
       ),
     ),
   );
+  $('btn-addbot').hidden = !isHost || room.players.length >= 6;
   renderPicker();
   const opt = $('opt-noEvenBids');
   opt.checked = room.options.noEvenBids;
@@ -402,7 +405,7 @@ function renderLobby() {
   $('btn-start').disabled = !enough;
   const hostName = room.players.find((p) => p.id === room.hostId)?.name ?? 'Host';
   $('lobby-hint').textContent = !enough
-    ? 'Es braucht mindestens 3 Spieler – schick den Link an deine Freunde.'
+    ? `Es braucht mindestens 3 Spieler – schick den Link an deine Freunde${isHost ? ' oder füge Bots hinzu' : ''}.`
     : isHost
       ? 'Alle da? Dann los!'
       : `Warte, bis ${hostName} das Spiel startet …`;
@@ -1043,6 +1046,7 @@ $('btn-copy').addEventListener('click', async () => {
 });
 $('btn-leave').addEventListener('click', () => send({ type: 'leave' }));
 $('btn-start').addEventListener('click', () => send({ type: 'start' }));
+$('btn-addbot').addEventListener('click', () => send({ type: 'addBot' }));
 $('opt-noEvenBids').addEventListener('change', (e) => send({ type: 'setOption', key: 'noEvenBids', value: e.target.checked }));
 $('btn-sound').addEventListener('click', () => {
   soundOn = !soundOn;
