@@ -62,6 +62,13 @@ test('Nach Zauberer oder nur Narren gibt es keine Bedienpflicht', () => {
   assert.equal(legalCards(hand, trickOf(N()), 'green').length, 2);
 });
 
+test('Hausregel: Liegt ein Zauberer im Stich, ist jede Karte erlaubt', () => {
+  const hand = [c('red', 2), c('blue', 9), c('green', 4), N()];
+  assert.equal(legalCards(hand, trickOf(c('red', 10), Z()), 'blue').length, 4);
+  assert.equal(legalCards(hand, trickOf(N(), c('red', 10), Z()), null).length, 4);
+  assert.equal(legalCards(hand, trickOf(c('blue', 1), Z()), 'blue').length, 4, 'auch nach Trumpf-Ausspiel');
+});
+
 test('Nach Narr bestimmt die erste Farbkarte die Bedienpflicht', () => {
   const hand = [c('red', 2), c('blue', 9)];
   assert.deepEqual(legalCards(hand, trickOf(N(), c('red', 10)), 'green'), ['red-2']);

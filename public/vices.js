@@ -3,7 +3,7 @@
 // (Füllstand, Glut, Rauch). Nur Darstellung, der Spielstand bleibt davon unberührt.
 
 export const VICE = {
-  beerMs: 4 * 60 * 1000, // so lange dauert ein Bier vom Servieren bis leer
+  beerSips: 8, // so viele Schlucke hat ein Bier (leer wird es nur durchs Trinken)
   refillBelow: 0.25, // nachbestellen erst, wenn höchstens noch ein Viertel drin ist
   cigaretteMs: 3 * 60 * 1000,
   cigarMs: 7 * 60 * 1000,
@@ -18,7 +18,7 @@ export function earnsCigar(bid, tricks) {
   return bid === tricks && bid >= VICE.cigarMinBid;
 }
 
-/** Füllstand 1 … 0 eines Biers, das vor `ms` serviert wurde. */
-export function beerLevel(ms) {
-  return Math.max(0, Math.min(1, 1 - ms / VICE.beerMs));
+/** Füllstand 1 … 0 eines Biers nach `sips` Schlucken (Prost zählt auch als Schluck). */
+export function beerLevel(sips) {
+  return Math.max(0, Math.min(1, 1 - sips / VICE.beerSips));
 }

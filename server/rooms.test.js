@@ -111,7 +111,7 @@ test('Figur: beim Beitreten mitgebracht (wenn frei), während des Spiels gesperr
   rooms.close();
 });
 
-test('Theke: Bier erst nachbestellen, wenn es fast leer ist', () => {
+test('Theke: Bier leert sich durchs Trinken, nachbestellen erst, wenn es fast leer ist', () => {
   const rooms = new Rooms();
   const { a, b, ids } = table(rooms);
   rooms.handle(a, { type: 'order', item: 'beer' });
@@ -120,11 +120,20 @@ test('Theke: Bier erst nachbestellen, wenn es fast leer ist', () => {
   assert.ok(vice.beer.age >= 0 && vice.beer.age < 1000);
   rooms.handle(a, { type: 'order', item: 'beer' });
   assert.match(a.last('error').message, /Trink erst mal aus/);
-  // Bier ist alt (fast leer): nachbestellen geht
+  // Leer wird es nur durchs Trinken (8 Schlucke, Prost zählt mit), nicht mit der Zeit
   const code = a.last('state').room.code;
-  rooms.rooms.get(code).players[0].vice.beerAt -= 60 * 60 * 1000;
+  const me = rooms.rooms.get(code).players[0];
+  me.vice.beerAt -= 60 * 60 * 1000;
+  rooms.handle(a, { type: 'order', item: 'beer' });
+  assert.match(a.last('error').message, /Trink erst mal aus/);
+  for (let i = 0; i < 6; i++) {
+    me.emoteSent = 0;
+    rooms.handle(a, { type: 'emote', kind: i ? 'sip' : 'cheers' });
+  }
+  assert.equal(b.last('state').room.players[0].vice.beer.sips, 6);
   rooms.handle(a, { type: 'order', item: 'beer' });
   assert.equal(b.last('state').room.players[0].vice.beer.n, 2);
+  assert.equal(b.last('state').room.players[0].vice.beer.sips, 0);
   rooms.handle(a, { type: 'order', item: 'schnaps' });
   assert.equal(a.last('error').message, 'Gibt es hier nicht.');
   rooms.close();

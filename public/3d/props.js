@@ -431,15 +431,22 @@ export class SeatProps {
     this.stick = null; // Zigarette/Zigarre
     this.held = false; // gerade in der Hand (sonst liegt sie im Aschenbecher)
     this.glow = 0; // beim Ziehen
-    this.beer = null; // { n, servedAt }
+    this.beer = null; // { n }
     this.smoking = null; // { kind, litAt, dur }
     this.wispAcc = 0;
-    this.level = 0;
+    this.level = 0; // Füllstand laut Server (nach den getrunkenen Schlucken)
+    this.shown = 0; // angezeigter Füllstand, sinkt beim Trinken langsam auf `level`
+    this.drain = null; // { from, at, dur }
+    this.drinkAt = -1e9; // Beginn der letzten Trink-Animation (vnow())
+    this.drinkKind = 'sip';
   }
 
   // Zeiten in Sekunden (performance.now()/1000), wie in table.js: vnow()
-  serveBeer(n, servedAt) {
-    this.beer = { n, servedAt };
+  serveBeer(n, sips = 0) {
+    this.beer = { n };
+    this.level = this.shown = beerLevel(sips);
+    this.drain = null;
+    setBeerLevel(this.mug, this.shown);
     this.mug.visible = true;
     this.coaster.visible = true;
     if (n !== this.coasterCount) {
@@ -447,6 +454,28 @@ export class SeatProps {
       this.coasterMat.map = coasterTexture(Math.min(n, 30));
       this.coasterMat.needsUpdate = true;
     }
+  }
+
+  /** Gerade wird getrunken (sip oder cheers): der Füllstand sinkt erst, wenn der Krug am Mund ist. */
+  drinking(kind, vt) {
+    this.drinkKind = kind;
+    this.drinkAt = vt;
+  }
+
+  /** Neue Zahl getrunkener Schlucke vom Server. `animate` = langsam absenken statt springen. */
+  setSips(sips, vt, animate) {
+    const level = beerLevel(sips);
+    if (level === this.level) return;
+    this.level = level;
+    if (!animate || level > this.shown) {
+      this.shown = level;
+      this.drain = null;
+      setBeerLevel(this.mug, level);
+      return;
+    }
+    // passend zur Animation: Schluck nach ~0,9 s am Mund, beim Prost erst nach dem Anstoßen
+    const start = this.drinkAt + (this.drinkKind === 'cheers' ? 2.0 : 0.9);
+    this.drain = { from: this.shown, at: Math.max(vt, start), dur: 0.8 };
   }
 
   light(kind, litAt) {
@@ -507,9 +536,11 @@ export class SeatProps {
   }
 
   update(vt, dt) {
-    if (this.beer) {
-      this.level = beerLevel((vt - this.beer.servedAt) * 1000);
-      setBeerLevel(this.mug, this.level);
+    if (this.drain) {
+      const k = clamp((vt - this.drain.at) / this.drain.dur, 0, 1);
+      this.shown = this.drain.from + (this.level - this.drain.from) * k;
+      setBeerLevel(this.mug, this.shown);
+      if (k >= 1) this.drain = null;
     }
     if (!this.stick) return;
     if (!this.held) this.restStick();

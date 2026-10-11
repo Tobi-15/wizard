@@ -8,7 +8,7 @@ In der Lobby wählt jeder seine **Spielfigur** (Zauberer, Pirat, Goblin, Zwerg, 
 
 ## Hausregel
 
-Wird eine **Fehlfarbe** ausgespielt, darf man **immer Trumpf** legen, auch wenn man die ausgespielte Farbe auf der Hand hat. Wird **Trumpf** ausgespielt, muss man Trumpf bedienen. Zauberer und Narren dürfen wie immer jederzeit gespielt werden.
+Wird eine **Fehlfarbe** ausgespielt, darf man **immer Trumpf** legen, auch wenn man die ausgespielte Farbe auf der Hand hat. Wird **Trumpf** ausgespielt, muss man Trumpf bedienen. Zauberer und Narren dürfen wie immer jederzeit gespielt werden. Liegt ein **Zauberer** im Stich (egal an welcher Stelle), darf jede Karte gelegt werden.
 
 In der Lobby lässt sich zusätzlich **„Ansagen dürfen nicht aufgehen“** einschalten. Dann darf der letzte Ansager keine Zahl wählen, mit der die Summe aller Ansagen gleich der Kartenzahl ist.
 

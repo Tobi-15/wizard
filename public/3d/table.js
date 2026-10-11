@@ -246,6 +246,7 @@ export class TableView {
   remoteEmote(id, kind) {
     const c = this.charById?.get(id);
     c?.react(kind === 'sip' ? 'drink' : kind, now());
+    if (c && (kind === 'sip' || kind === 'cheers')) c.props.drinking(kind, vnow());
     return !!c;
   }
 
@@ -281,17 +282,21 @@ export class TableView {
     const beer = vice.beer;
     if (beer && props.beerN !== beer.n) {
       props.beerN = beer.n;
-      if (first || beer.age > VICE.serveMs) props.serveBeer(beer.n, vt - beer.age / 1000 + 7);
+      props.serverSips = beer.sips;
+      if (first || beer.age > VICE.serveMs) props.serveBeer(beer.n, beer.sips);
       else {
         this.waiter.enqueue({
           target: props.group,
           item: 'beer',
           onArrive: () => {
-            props.serveBeer(beer.n, vnow());
+            props.serveBeer(beer.n, props.serverSips ?? 0);
             this.hooks.sound('clink');
           },
         });
       }
+    } else if (beer) {
+      props.serverSips = beer.sips;
+      if (props.beer?.n === beer.n) props.setSips(beer.sips, vt, !first);
     }
     const sm = vice.smoke;
     if (sm) {
@@ -342,6 +347,7 @@ export class TableView {
     this.endSelfFx();
     this.selfFx = { kind, t0: t };
     const props = this.myProps;
+    if (kind === 'cheers' || kind === 'sip') this.myVice().drinking(kind, vnow());
     if ((kind === 'cheers' || kind === 'sip') && this.egoActive()) {
       if (!this.myMug) {
         this.myMug = makeBeer();
@@ -349,7 +355,7 @@ export class TableView {
         this.camera.add(this.myMug);
       }
       this.myMug.visible = true;
-      setBeerLevel(this.myMug, props.beer ? props.level : 0);
+      setBeerLevel(this.myMug, props.beer ? props.shown : 0);
       props.mug.visible = false;
     }
     if ((kind === 'puff' || kind === 'light') && this.egoActive() && props.stick) {
@@ -448,7 +454,7 @@ export class TableView {
         m.scale.setScalar(0.85);
         m.position.set(0.3 - 0.2 * drink, -0.62 + 0.4 * up + 0.06 * drink, -0.95 + 0.4 * drink);
         m.rotation.set(0.25 + 1.15 * drink, -0.6, -0.12);
-        setBeerLevel(m, this.myProps.level);
+        setBeerLevel(m, this.myProps.shown);
         pitch += 0.1 * drink;
       }
       if (s > 2.2 || !m?.visible) this.endSelfFx();
@@ -555,7 +561,7 @@ export class TableView {
     this.seatChars.forEach((c, i) => {
       if (!c || c.props.synced) return;
       c.props.synced = true;
-      c.props.serveBeer(2 + i * 2, vt - 20 - i * 35);
+      c.props.serveBeer(2 + i * 2, 1 + ((i * 3) % 6));
       if (i % 2) c.props.light(i === 3 ? 'cigar' : 'cigarette', vt - 15 - i * 10);
       c.props.setButts(i + 1);
     });

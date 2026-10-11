@@ -213,6 +213,7 @@ const SMOKE_T = {
   remotePuff: { inhale: 1.3, inhaleDur: 0.85, exhale: 2.35 },
   remoteLight: { flint: 1.0, inhale: 1.25, inhaleDur: 0.8, exhale: 2.25 },
 };
+const SMOKE_VOL = 0.85; // alle Rauch-Geräusche (Feuerzeug, Ziehen, Ausatmen) 15 % leiser
 let breathBuf = null;
 /** Rauschen, das wie Atem klingt: gefiltert, mit weichem An- und Abschwellen und wanderndem Filter. */
 function breath(start, dur, { f0 = 900, f1 = 900, q = 0.7, vol = 0.15, attack = 0.15, release = 0.4, type = 'bandpass' } = {}) {
@@ -301,14 +302,14 @@ const SOUNDS = {
   // bei Mitspielern später und leiser)
   light: (o = {}) => {
     const T = o.remote ? SMOKE_T.remoteLight : SMOKE_T.selfLight;
-    const k = o.remote ? 0.5 : 1;
+    const k = (o.remote ? 0.5 : 1) * SMOKE_VOL;
     lighter(T.flint, k);
     smokeDraw(T.inhale, T.inhaleDur, o.cigar, k);
     exhale(T.exhale, o.cigar, k);
   },
   puff: (o = {}) => {
     const T = o.remote ? SMOKE_T.remotePuff : SMOKE_T.selfPuff;
-    const k = o.remote ? 0.5 : 1;
+    const k = (o.remote ? 0.5 : 1) * SMOKE_VOL;
     smokeDraw(T.inhale, T.inhaleDur, o.cigar, k);
     exhale(T.exhale, o.cigar, k);
   },
@@ -763,6 +764,7 @@ $('lobby-emotes').replaceChildren(...emoteButtons(sendEmote));
 
 function sendEmote(kind) {
   if (!state || !emoteByKind[kind]) return;
+  if (kind === 'cheers' && beerPending()) return toast('Der Wirt bringt dein Bier gleich.', true);
   if (kind === 'cheers' && !table.myVice()?.canDrink()) {
     toast('Prost ohne Bier? Erst eins bestellen (Taste B).', true);
     return;
@@ -832,8 +834,16 @@ function order(item) {
   if (item === 'cigar') myBubble('🎩 Eine Zigarre, bitte!');
 }
 
+/** Der Wirt bringt gerade ein neues Bier (der Server zählt Schlucke schon fürs neue). */
+function beerPending() {
+  const v = myViceState();
+  const props = table.myVice();
+  return !!(props && v?.beer && props.beer?.n !== v.beer.n);
+}
+
 function sip() {
   const props = table.myVice();
+  if (beerPending()) return toast('Der Wirt bringt dein Bier gleich.', true);
   if (!props?.canDrink()) return order('beer');
   if (!throttleAct()) return;
   send({ type: 'emote', kind: 'sip' });
@@ -870,7 +880,7 @@ function viceEffects(prev, v, first) {
 function barItems() {
   const v = myViceState();
   const props = table.myVice();
-  const pending = props && v?.beer && props.beer?.n !== v.beer.n; // der Wirt ist unterwegs
+  const pending = beerPending(); // der Wirt ist unterwegs
   const level = props?.beer ? Math.round(props.level * 100) : 0;
   const smoking = !!props?.isSmoking();
   const kind = props?.smoking?.kind;
@@ -883,7 +893,7 @@ function barItems() {
       disabled: pending || (props?.beer && props.level > VICE.refillBelow),
       act: () => order('beer'),
     },
-    { key: 'T', icon: '🫗', label: 'Schluck', short: 'Schluck', sub: props?.beer ? `${v?.beer?.n ?? 0}. Bier` : 'kein Bier', disabled: !props?.canDrink(), act: sip },
+    { key: 'T', icon: '🫗', label: 'Schluck', short: 'Schluck', sub: props?.beer ? `${v?.beer?.n ?? 0}. Bier` : 'kein Bier', disabled: pending || !props?.canDrink(), act: sip },
     smoking
       ? { key: 'Z', icon: '🚭', label: 'Ausdrücken', short: 'Ausdrücken', sub: kind === 'cigar' ? 'Zigarre' : 'Zigarette', act: () => send({ type: 'order', item: 'putout' }) }
       : { key: 'Z', icon: '🚬', label: 'Zigarette', short: 'Zigarette', sub: 'anzünden', act: () => order('cigarette') },

@@ -44,7 +44,9 @@ export function ledSuit(trick) {
 /** Ids der Karten aus `hand`, die in den aktuellen Stich gespielt werden dürfen. */
 export function legalCards(hand, trick, trump) {
   const led = ledSuit(trick);
-  if (!led || !hand.some((c) => c.kind === 'num' && c.suit === led)) {
+  // Hausregel: Liegt ein Zauberer im Stich (egal an welcher Stelle), ist alles erlaubt
+  const wizard = trick.some(({ card }) => card.kind === 'Z');
+  if (!led || wizard || !hand.some((c) => c.kind === 'num' && c.suit === led)) {
     return hand.map((c) => c.id);
   }
   return hand

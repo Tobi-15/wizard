@@ -140,7 +140,6 @@ export class Character {
     this.pitch = 0.2;
     this.mood = 'neutral';
     this.remoteGoal = null; // echter Blick des Spielers (3D-Client), sonst null
-    this.nextDrink = 0;
     this.nextPuff = 0;
 
     this.buildChair();
@@ -480,12 +479,8 @@ export class Character {
     let inhale = 0;
     let flame = 0;
     const props = this.props;
-    // Ab und zu einen Schluck nehmen bzw. ziehen (nicht, wenn gerade etwas anderes passiert)
-    if (!this.nextDrink) this.nextDrink = t + 6 + Math.random() * 30;
-    if (t > this.nextDrink) {
-      this.nextDrink = t + 22 + Math.random() * 40;
-      if (!this.turn && !this.reactions.length && props.canDrink()) this.react('drink', t);
-    }
+    // Ab und zu ziehen (nicht, wenn gerade etwas anderes passiert). Getrunken wird nur auf
+    // echten Schluck hin (Spieler oder Bot über den Server), weil das den Füllstand senkt.
     if (props.isSmoking()) {
       if (!this.nextPuff) this.nextPuff = t + 5 + Math.random() * 10;
       if (t > this.nextPuff) {

@@ -3,7 +3,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { Game, GameError, MAX_PLAYERS, MIN_PLAYERS } from './game.js';
-import { VICE, SMOKE_MS, earnsCigar } from '../public/vices.js';
+import { VICE, SMOKE_MS, earnsCigar, beerLevel } from '../public/vices.js';
 import { botMove } from './bot.js';
 
 const ROOM_TTL_MS = 30 * 60 * 1000;
@@ -189,8 +189,9 @@ export class Rooms {
   addPlayer(room, token, name) {
     const player = {
       id: randomBytes(6).toString('hex'), token, name, character: null, conns: new Set(),
-      // Theke: Bier (bestellt um beerAt, insgesamt beers), Rauchwaren, verdiente Zigarren, Kippen im Aschenbecher
-      vice: { beerAt: null, beers: 0, smoke: null, cigars: 0, butts: 0 },
+      // Theke: Bier (bestellt um beerAt, insgesamt beers, davon sips Schlucke getrunken), Rauchwaren,
+      // verdiente Zigarren, Kippen im Aschenbecher
+      vice: { beerAt: null, beers: 0, sips: 0, smoke: null, cigars: 0, butts: 0 },
     };
     room.players.push(player);
     return player;
@@ -323,6 +324,8 @@ export class Rooms {
           g.play(bot.id, move.cardId);
           if (g.completedTrick) this.scheduleCollect(room);
         }
+        // ab und zu ein Schluck Bier (der Füllstand sinkt nur durchs Trinken)
+        if (Math.random() < 0.15 && this.drink(bot)) this.relay(room, bot, { type: 'emote', id: bot.id, kind: 'sip' });
       } catch (err) {
         console.error('Bot-Zug fehlgeschlagen', err);
         return;
@@ -342,10 +345,11 @@ export class Rooms {
     const t = Date.now();
     settleSmoke(v, t);
     if (item === 'beer') {
-      const full = v.beerAt != null && t - v.beerAt < VICE.serveMs + VICE.beerMs * (1 - VICE.refillBelow);
+      const full = v.beerAt != null && beerLevel(v.sips) > VICE.refillBelow;
       if (full) throw new GameError('Trink erst mal aus – dein Bier ist noch gut voll.');
       v.beerAt = t;
       v.beers += 1;
+      v.sips = 0;
     } else if (item === 'putout') {
       if (!v.smoke) throw new GameError('Du rauchst gerade nichts.');
       v.smoke = null;
@@ -420,6 +424,16 @@ export class Rooms {
     if (t - (player.emoteSent ?? 0) < EMOTE_MIN_MS) return;
     player.emoteSent = t;
     this.relay(room, player, { type: 'emote', id: player.id, kind });
+    // Schluck und Prost leeren das Bier: neuen Füllstand an alle (ohne die Bots neu zu takten)
+    if ((kind === 'sip' || kind === 'cheers') && this.drink(player)) this.broadcast(room, { bots: false });
+  }
+
+  /** Ein Schluck aus dem eigenen Bier. false, wenn keins da oder es schon leer ist. */
+  drink(player) {
+    const v = player.vice;
+    if (v.beerAt == null || beerLevel(v.sips) <= 0) return false;
+    v.sips += 1;
+    return true;
   }
 
   /** Nachricht an alle anderen Spieler im Raum (nicht an den Absender). */
@@ -430,7 +444,7 @@ export class Rooms {
     }
   }
 
-  broadcast(room) {
+  broadcast(room, { bots = true } = {}) {
     if (!this.rooms.has(room.code)) return;
     room.touched = Date.now();
     const lobby = {
@@ -445,7 +459,7 @@ export class Rooms {
       const state = { type: 'state', me: p.id, room: lobby, game: room.game ? room.game.viewFor(p.id) : null };
       for (const c of p.conns) c.send(state);
     }
-    this.scheduleBots(room);
+    if (bots) this.scheduleBots(room);
   }
 
   sweep() {
@@ -474,7 +488,7 @@ function viceView(v) {
   const t = Date.now();
   settleSmoke(v, t);
   return {
-    beer: v.beerAt == null ? null : { age: t - v.beerAt, n: v.beers },
+    beer: v.beerAt == null ? null : { age: t - v.beerAt, n: v.beers, sips: v.sips },
     smoke: v.smoke ? { kind: v.smoke.kind, age: t - v.smoke.at } : null,
     cigars: v.cigars,
     butts: Math.min(v.butts, 30),
