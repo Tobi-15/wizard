@@ -3,7 +3,7 @@
 Das Kartenspiel Wizard (3–6 Spieler) als Browser-Spiel. Tobi spielt es mit Freunden. Die Oberfläche ist komplett auf Deutsch, und Tobi schreibt auf Deutsch. Er möchte, dass Aufgaben ohne Zwischenfragen zu Ende gebracht werden.
 
 - **Live:** https://wizard-zryw.onrender.com
-- **Repo:** https://github.com/Tobi-15/wizard (privat, Branch `main`; `gh` ist als Tobi-15 eingeloggt)
+- **Repo:** https://github.com/Tobi-15/GrandImperialWizard (privat, Branch `main`; `gh` ist als Tobi-15 eingeloggt)
 - **Hosting:** Render.com, Free-Plan, per Blueprint (`render.yaml`). **Jeder Push auf `main` deployt automatisch** (dauert ca. 1–2 Minuten).
 
 ## Hausregeln (weichen vom Original ab)
